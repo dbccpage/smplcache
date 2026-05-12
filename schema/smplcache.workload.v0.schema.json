@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "smplcache Workload v0",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "smplcache.workload.v0"
+    },
+    "shapes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "shape_hash": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "predicate_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "aggregate_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "projection_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "join_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "security_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "relation",
+          "predicate_cols",
+          "aggregate_cols",
+          "group_cols"
+        ]
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "relation": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "INSERT",
+              "UPDATE",
+              "DELETE"
+            ]
+          },
+          "changed_cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "old": {
+            "type": "object"
+          },
+          "new": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "relation",
+          "changed_cols"
+        ]
+      }
+    },
+    "observed_shape_types": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "relation": {
+            "type": "string"
+          },
+          "column": {
+            "type": "string"
+          },
+          "physical_type": {
+            "type": "string"
+          },
+          "regimes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "example_values": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "avg_rows": {
+                  "type": "number"
+                },
+                "executions": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "shapes",
+    "events"
+  ]
+}

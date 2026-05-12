@@ -1,42 +1,77 @@
 # smplcache
 
-`smplcache` is a small local tool for analyzing CDC-style write events against cached query shapes.
+**Don’t invalidate what you can repair.**
 
-Instead of invalidating every cached query when a table changes, `smplcache` stores a dependency fingerprint for each query shape and invalidates only when a write boundary intersects that fingerprint.
+smplcache is not a cache server. It is a workload-shape advisor for CDC-backed caches.
 
-It can also mathematically identify when cached aggregates can be incrementally repaired instead of dropped.
+It compares blind table-level invalidation against query-shape dependency invalidation, detects repairable aggregates, maps cache coupling, and flags common query-shape pathologies like implicit conversions, missing indexes, and parameter skew.
 
-### Cache invalidation by shape, not table.
+## CLI Tools
 
----
+`smplcache` exposes four workload-shape tools.
 
-## Public Positioning
+### `report`
 
-`smplcache` is not a cache server yet. It is a dependency-fingerprint simulator and advisor for CDC-backed caches. It proves that topological CDC routing can eliminate false cache invalidations and enable real-time aggregate repairs.
+Analyze cache invalidation behavior from a workload JSON file.
 
-## Quick Start & Demos
+```bash
+python cli.py report examples/workload.common.json --format markdown --topomap
+```
 
-The repository includes a numbered curriculum of demos to prove the architecture works both in application middleware and natively inside an RDBMS.
+Reports:
 
-### Python Middleware Simulators
-These simulate how `smplcache` operates as a Rust/Go middleware consuming a logical replication stream (no database required):
-1. `python examples/01_python_orders_revenue_demo.py` - Proves how orthogonal writes preserve the cache, while intersecting writes incrementally repair the aggregate.
-2. `python examples/02_python_inventory_demo.py` - A secondary mock proving basic dependency fingerprint routing.
+* false invalidations avoided
+* shape-level invalidations
+* avoided invalidations by event
+* repairable aggregate updates
+* top invalidating columns
+* coupled query shapes
+* TopoMap geometry and recommendations
 
-### Native SQL Implementations
-If you want to test the math natively inside a database engine, run these scripts in your SQL client:
-3. `examples/sql/03_sqlserver_invalidation_trigger.sql` - Implements standard dependency fingerprinting using T-SQL triggers.
-4. `examples/sql/04_sqlserver_incremental_repair.sql` - **(Recommended)** The ultimate proof. Implements streaming incremental materialized views inside SQL Server using `inserted` and `deleted` topological boundaries.
-5. `examples/sql/05_postgres_invalidation_trigger.sql` - Implements standard dependency fingerprinting using PL/pgSQL and `JSONB` diffing.
+### `doctor`
 
-## Documentation
+Detect query-shape pathologies.
 
-- [Dependency Fingerprinting](docs/dependency_fingerprinting.md)
-- [Invalidation Rules & Incremental Repair](docs/invalidation_rules.md)
+```bash
+python cli.py doctor examples/workload.common.json --format markdown
+```
 
+Finds:
 
-## License
-Licensed under the Apache License, Version 2.0.
+* implicit conversion risks
+* missing index candidates
+* parameter skew
+* observed shape-type splits
 
-## Copyright
-Copyright 2026 Jeremy Carroll
+### `compare`
+
+Compare an obstructed workload against a lifted workload.
+
+```bash
+python cli.py compare examples/obstruction_mess.json examples/lifted_clean.json --format markdown
+```
+
+Shows:
+
+* coupling reduction
+* Betti-1 cycle reduction
+* obstruction score before/after
+* suggested structural lift
+
+### `matrix` experimental
+
+Analyze the workload as an invalidation correlation matrix.
+
+```bash
+python cli.py matrix examples/obstruction_mess.json examples/lifted_clean.json
+```
+
+Shows:
+
+* dominance score
+* invalidation entropy
+* dominant invalidation component
+* number of shapes controlled by the dominant mode
+
+This command is experimental. The core `smplcache` logic does not depend on matrix geometry.
+

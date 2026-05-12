@@ -1,0 +1,276 @@
+{
+  "version": "smplcache.workload.v0",
+  "shapes": [
+    {
+      "name": "revenue_by_customer_paid",
+      "shape_hash": "q_hash_revenue_by_cust",
+      "relation": "orders",
+      "query": "SELECT customer_id, SUM(amount) FROM orders WHERE status = 'paid' GROUP BY customer_id",
+      "predicate_cols": [
+        "status"
+      ],
+      "aggregate_cols": [
+        "amount"
+      ],
+      "group_cols": [
+        "customer_id"
+      ],
+      "projection_cols": [
+        "customer_id"
+      ],
+      "join_cols": [],
+      "security_cols": []
+    },
+    {
+      "name": "fulfillment_dashboard",
+      "shape_hash": "q_hash_fulfillment_dashboard",
+      "relation": "orders",
+      "query": "SELECT customer_id, status, amount FROM orders WHERE status IN ('paid', 'pending')",
+      "predicate_cols": [
+        "status"
+      ],
+      "aggregate_cols": [],
+      "group_cols": [],
+      "projection_cols": [
+        "customer_id",
+        "status",
+        "amount"
+      ],
+      "join_cols": [],
+      "security_cols": []
+    },
+    {
+      "name": "order_detail_view",
+      "shape_hash": "q_hash_order_detail",
+      "relation": "orders",
+      "query": "SELECT customer_id, shipping_address, status FROM orders WHERE customer_id = @customer_id",
+      "predicate_cols": [
+        "customer_id"
+      ],
+      "aggregate_cols": [],
+      "group_cols": [],
+      "projection_cols": [
+        "customer_id",
+        "shipping_address",
+        "status"
+      ],
+      "join_cols": [],
+      "security_cols": [
+        "customer_id"
+      ],
+      "params": {
+        "customer_id": {
+          "type": "nvarchar(4000)"
+        }
+      }
+    },
+    {
+      "name": "inventory_stock_count",
+      "shape_hash": "q_hash_inventory_stock",
+      "relation": "inventory",
+      "query": "SELECT item_id, SUM(quantity) FROM inventory GROUP BY item_id",
+      "predicate_cols": [],
+      "aggregate_cols": [
+        "quantity"
+      ],
+      "group_cols": [
+        "item_id"
+      ],
+      "projection_cols": [
+        "item_id"
+      ],
+      "join_cols": [],
+      "security_cols": []
+    }
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "shipping_address"
+      ],
+      "old": {
+        "customer_id": "c1",
+        "status": "paid",
+        "amount": 100,
+        "shipping_address": "old"
+      },
+      "new": {
+        "customer_id": "c1",
+        "status": "paid",
+        "amount": 100,
+        "shipping_address": "new"
+      }
+    },
+    {
+      "event_id": 2,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "amount"
+      ],
+      "old": {
+        "customer_id": "c1",
+        "status": "paid",
+        "amount": 100
+      },
+      "new": {
+        "customer_id": "c1",
+        "status": "paid",
+        "amount": 150
+      }
+    },
+    {
+      "event_id": 3,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "status"
+      ],
+      "old": {
+        "customer_id": "c2",
+        "status": "pending",
+        "amount": 80
+      },
+      "new": {
+        "customer_id": "c2",
+        "status": "paid",
+        "amount": 80
+      }
+    },
+    {
+      "event_id": 4,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "status"
+      ],
+      "old": {
+        "customer_id": "c2",
+        "status": "paid",
+        "amount": 80
+      },
+      "new": {
+        "customer_id": "c2",
+        "status": "cancelled",
+        "amount": 80
+      }
+    },
+    {
+      "event_id": 5,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "customer_id"
+      ],
+      "old": {
+        "customer_id": "c1",
+        "status": "paid",
+        "amount": 150
+      },
+      "new": {
+        "customer_id": "c3",
+        "status": "paid",
+        "amount": 150
+      }
+    },
+    {
+      "event_id": 6,
+      "relation": "inventory",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "quantity"
+      ],
+      "old": {
+        "item_id": "item_42",
+        "quantity": 50
+      },
+      "new": {
+        "item_id": "item_42",
+        "quantity": 40
+      }
+    },
+    {
+      "event_id": 7,
+      "relation": "customers",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "email"
+      ],
+      "old": {
+        "id": "c1",
+        "email": "old@example.com"
+      },
+      "new": {
+        "id": "c1",
+        "email": "new@example.com"
+      }
+    }
+  ],
+  "schema": {
+    "orders": {
+      "columns": {
+        "id": {
+          "type": "int",
+          "nullable": false,
+          "physical_type": "int"
+        },
+        "customer_id": {
+          "type": "varchar(50)",
+          "nullable": false,
+          "physical_type": "varchar(50)"
+        },
+        "status": {
+          "type": "varchar(20)",
+          "nullable": false,
+          "physical_type": "varchar(20)"
+        },
+        "amount": {
+          "type": "int",
+          "nullable": false,
+          "physical_type": "int"
+        },
+        "shipping_address": {
+          "type": "nvarchar(max)",
+          "nullable": true
+        }
+      },
+      "indexes": []
+    }
+  },
+  "observed_shape_types": [
+    {
+      "relation": "orders",
+      "column": "customer_id",
+      "physical_type": "int",
+      "regimes": [
+        {
+          "name": "small",
+          "example_values": [
+            "2"
+          ],
+          "avg_rows": 3,
+          "executions": 8000
+        },
+        {
+          "name": "medium",
+          "example_values": [
+            "300"
+          ],
+          "avg_rows": 800,
+          "executions": 500
+        },
+        {
+          "name": "whale",
+          "example_values": [
+            "70000"
+          ],
+          "avg_rows": 900000,
+          "executions": 20
+        }
+      ]
+    }
+  ]
+}

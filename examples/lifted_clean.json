@@ -1,0 +1,68 @@
+{
+  "version": "smplcache.workload.v0",
+  "shapes": [
+    {
+      "name": "paid_revenue_projection",
+      "relation": "orders",
+      "predicate_cols": ["payment_status"],
+      "aggregate_cols": ["amount"],
+      "group_cols": ["customer_id"]
+    },
+    {
+      "name": "fulfillment_projection",
+      "relation": "orders",
+      "predicate_cols": ["fulfillment_status"],
+      "projection_cols": ["customer_id", "fulfillment_status", "amount"]
+    },
+    {
+      "name": "recent_orders",
+      "relation": "orders",
+      "predicate_cols": ["payment_status"],
+      "projection_cols": ["id", "created_at"]
+    },
+    {
+      "name": "customer_history",
+      "relation": "orders",
+      "predicate_cols": ["payment_status", "customer_id"],
+      "projection_cols": ["id"]
+    },
+    {
+      "name": "ops_queue",
+      "relation": "orders",
+      "predicate_cols": ["fulfillment_status", "region"],
+      "projection_cols": ["id"]
+    },
+    {
+      "name": "support_projection",
+      "relation": "orders",
+      "predicate_cols": ["support_status", "ticket_id"],
+      "projection_cols": ["id", "issue"]
+    }
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": ["payment_status"],
+      "old": {"payment_status": "pending"},
+      "new": {"payment_status": "paid"}
+    },
+    {
+      "event_id": 2,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": ["fulfillment_status"],
+      "old": {"fulfillment_status": "pending"},
+      "new": {"fulfillment_status": "shipped"}
+    },
+    {
+      "event_id": 3,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": ["support_status"],
+      "old": {"support_status": "open"},
+      "new": {"support_status": "closed"}
+    }
+  ]
+}
