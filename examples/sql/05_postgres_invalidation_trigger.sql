@@ -118,3 +118,6 @@ FOR EACH ROW EXECUTE FUNCTION route_boundary_to_shapes();
 -- Expectation: is_valid becomes FALSE because 'amount' is in the dependency fingerprint.
 -- UPDATE orders SET amount = 150 WHERE id = 1;
 -- SELECT * FROM cache_query_shapes;
+
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Jeremy Carroll
