@@ -116,9 +116,9 @@ BEGIN CATCH
 END CATCH
 GO
 
-/* ==============================================================================
+==============================================================================
    TESTING THE DEMO: Drop this into SSMS to prove it
-   ==============================================================================
+==============================================================================
 
 PRINT '--- INITIAL STATE ---';
 SELECT * FROM dbo.cached_aggregates;
@@ -153,4 +153,5 @@ PRINT '--- TEST 5: Group Key Change (c1 -> c3) ---';
 UPDATE dbo.orders SET customer_id = 'c3' WHERE id = 1;
 SELECT * FROM dbo.cached_aggregates;
 
-============================================================================== */
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Jeremy Carroll

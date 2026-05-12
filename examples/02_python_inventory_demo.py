@@ -41,3 +41,6 @@ def main() -> None:
         
 if __name__ == "__main__":
     main()
+
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Jeremy Carroll

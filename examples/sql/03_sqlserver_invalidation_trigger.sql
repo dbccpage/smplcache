@@ -159,3 +159,6 @@ SELECT * FROM dbo.cache_query_shapes;
 UPDATE dbo.orders SET amount = 150 WHERE id = 1;
 SELECT * FROM dbo.cache_query_shapes;
 */
+
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Jeremy Carroll

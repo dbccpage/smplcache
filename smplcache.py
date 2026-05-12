@@ -70,5 +70,5 @@ def process_event(shape: QueryShape, cache: AggregateCache, event: WriteEvent) -
 
     return "incrementally updated"
 
-
-
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Jeremy Carroll

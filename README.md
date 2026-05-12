@@ -33,3 +33,10 @@ If you want to test the math natively inside a database engine, run these script
 
 - [Dependency Fingerprinting](docs/dependency_fingerprinting.md)
 - [Invalidation Rules & Incremental Repair](docs/invalidation_rules.md)
+
+
+## License
+Licensed under the Apache License, Version 2.0.
+
+## Copyright
+Copyright 2026 Jeremy Carroll
