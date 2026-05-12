@@ -1,0 +1,41 @@
+{
+  "shapes": [
+    {
+      "name": "revenue_by_customer_paid",
+      "relation": "orders",
+      "predicate_cols": ["status"],
+      "aggregate_cols": ["amount"],
+      "group_cols": ["customer_id"]
+    },
+    {
+      "name": "recent_orders_list",
+      "relation": "orders",
+      "predicate_cols": ["created_at"],
+      "aggregate_cols": [],
+      "group_cols": []
+    },
+    {
+      "name": "fulfillment_dashboard",
+      "relation": "orders",
+      "predicate_cols": ["status", "shipping_address"],
+      "aggregate_cols": [],
+      "group_cols": []
+    },
+    {
+      "name": "inventory_levels",
+      "relation": "inventory",
+      "predicate_cols": ["warehouse_id"],
+      "aggregate_cols": ["quantity"],
+      "group_cols": ["item_id"]
+    }
+  ],
+  "events": [
+    {"relation": "orders", "changed_cols": ["shipping_address"]},
+    {"relation": "orders", "changed_cols": ["shipping_address"]},
+    {"relation": "orders", "changed_cols": ["amount"]},
+    {"relation": "orders", "changed_cols": ["status"]},
+    {"relation": "orders", "changed_cols": ["status"]},
+    {"relation": "inventory", "changed_cols": ["last_audited"]},
+    {"relation": "inventory", "changed_cols": ["quantity"]}
+  ]
+}

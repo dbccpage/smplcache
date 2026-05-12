@@ -1,3 +1,5 @@
+# License: Licensed under the Apache License, Version 2.0.
+# Copyright: Copyright 2026 Jeremy Carroll
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +49,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Jeremy Carroll

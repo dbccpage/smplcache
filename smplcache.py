@@ -1,3 +1,5 @@
+# License: Licensed under the Apache License, Version 2.0.
+# Copyright: Copyright 2026 Jeremy Carroll
 """
 smplcache: Dependency Fingerprint Simulator
 
@@ -12,13 +14,23 @@ from typing import Any
 class QueryShape:
     name: str
     relation: str
-    predicate_cols: set[str]
-    aggregate_cols: set[str]
-    group_cols: set[str]
+    predicate_cols: set[str] = field(default_factory=set)
+    aggregate_cols: set[str] = field(default_factory=set)
+    group_cols: set[str] = field(default_factory=set)
+    projection_cols: set[str] = field(default_factory=set)
+    join_cols: set[str] = field(default_factory=set)
+    security_cols: set[str] = field(default_factory=set)
 
     @property
     def fingerprint(self) -> set[str]:
-        return self.predicate_cols | self.aggregate_cols | self.group_cols
+        return (
+            self.predicate_cols
+            | self.aggregate_cols
+            | self.group_cols
+            | self.projection_cols
+            | self.join_cols
+            | self.security_cols
+        )
 
 
 @dataclass
@@ -69,6 +81,3 @@ def process_event(shape: QueryShape, cache: AggregateCache, event: WriteEvent) -
         cache.add(new_customer, new_amount)
 
     return "incrementally updated"
-
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Jeremy Carroll

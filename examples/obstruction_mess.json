@@ -1,0 +1,68 @@
+{
+  "version": "smplcache.workload.v0",
+  "shapes": [
+    {
+      "name": "revenue_by_customer_paid",
+      "relation": "orders",
+      "predicate_cols": ["status"],
+      "aggregate_cols": ["amount"],
+      "group_cols": ["customer_id"]
+    },
+    {
+      "name": "fulfillment_dashboard",
+      "relation": "orders",
+      "predicate_cols": ["status"],
+      "projection_cols": ["customer_id", "status", "amount"]
+    },
+    {
+      "name": "recent_orders",
+      "relation": "orders",
+      "predicate_cols": ["status"],
+      "projection_cols": ["id", "created_at"]
+    },
+    {
+      "name": "customer_history",
+      "relation": "orders",
+      "predicate_cols": ["status", "customer_id"],
+      "projection_cols": ["id"]
+    },
+    {
+      "name": "ops_queue",
+      "relation": "orders",
+      "predicate_cols": ["status", "region"],
+      "projection_cols": ["id"]
+    },
+    {
+      "name": "support_view",
+      "relation": "orders",
+      "predicate_cols": ["status", "ticket_id"],
+      "projection_cols": ["id", "issue"]
+    }
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": ["status"],
+      "old": {"status": "pending"},
+      "new": {"status": "paid"}
+    },
+    {
+      "event_id": 2,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": ["status"],
+      "old": {"status": "paid"},
+      "new": {"status": "shipped"}
+    },
+    {
+      "event_id": 3,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": ["status"],
+      "old": {"status": "shipped"},
+      "new": {"status": "delivered"}
+    }
+  ]
+}

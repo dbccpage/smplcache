@@ -1,3 +1,5 @@
+-- License: Licensed under the Apache License, Version 2.0.
+-- Copyright: Copyright 2026 Jeremy Carroll
 -- ==============================================================================
 -- smplcache: SQL Server Setup & Demo
 -- This script creates the schema, inserts seed data, and uses an AFTER UPDATE
@@ -159,6 +161,3 @@ SELECT * FROM dbo.cache_query_shapes;
 UPDATE dbo.orders SET amount = 150 WHERE id = 1;
 SELECT * FROM dbo.cache_query_shapes;
 */
-
--- SPDX-License-Identifier: Apache-2.0
--- Copyright 2026 Jeremy Carroll
