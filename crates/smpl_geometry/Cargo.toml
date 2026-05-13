@@ -1,0 +1,11 @@
+[package]
+name = "smpl_geometry"
+version = "0.1.0"
+edition = "2021"
+description = "Workload structure discovery and lift proposals for smplcache"
+license = "Apache-2.0"
+
+[dependencies]
+smpl_evidence = { path = "../smpl_evidence" }
+smpl_cert = { path = "../smpl_cert" }
+serde = { version = "1", features = ["derive"] }
