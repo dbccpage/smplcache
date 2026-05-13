@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smplcache"
+version = "0.1.0"
+description = "A theorem-backed diagnostic cache engine for relational workloads."
+readme = "README.md"
+authors = [
+    { name = "Jeremy Carroll", email = "author@example.com" }
+]
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Database",
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+"Homepage" = "https://github.com/anomalon/smplcache"
+"Bug Tracker" = "https://github.com/anomalon/smplcache/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black",
+    "mypy"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["smplcache", "smplcache.*"]

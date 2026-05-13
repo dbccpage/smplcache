@@ -1,7 +1,6 @@
 import unittest
-from smplcache import (QueryShape, WriteEvent, EvidenceLevel, RepairClass,
-                       Authority, DecisionPacket, RepairVerdict, classify_repairability)
-from cli import calculate_entropy, calculate_invalidation_graph
+from smplcache import AggregateCache, Decision, DecisionKind, QueryShape, WriteEvent, process_event
+from cli import calculate_entropy, calculate_topomap
 
 class TestSmplcache(unittest.TestCase):
     def test_query_shape_fingerprint(self):
@@ -28,6 +27,69 @@ class TestSmplcache(unittest.TestCase):
         self.assertTrue(bool(shape.fingerprint & event_match.changed_cols))
         self.assertFalse(bool(shape.fingerprint & event_miss.changed_cols))
 
+    def test_decision_constructors(self):
+        from smplcache import Certificate
+        cert1 = Certificate(shape="shape_a", event_id="1", relation="r", decision_kind=DecisionKind.PRESERVE, reason_code="")
+        preserve = Decision.preserve("no intersection", cert1)
+        cert2 = Certificate(shape="shape_b", event_id="2", relation="r", decision_kind=DecisionKind.REPAIR, reason_code="", repair_program="sum_delta")
+        repair = Decision.repair("delta applied", cert2)
+        cert3 = Certificate(shape="shape_c", event_id="3", relation="r", decision_kind=DecisionKind.INVALIDATE, reason_code="")
+        invalidate = Decision.invalidate("obstructed", cert3)
+        cert4 = Certificate(shape="shape_d", event_id="4", relation="r", decision_kind=DecisionKind.UNSUPPORTED, reason_code="")
+        unsupported = Decision.unsupported("no certifier", cert4)
+
+        self.assertEqual(preserve.kind, DecisionKind.PRESERVE)
+        self.assertEqual(repair.kind, DecisionKind.REPAIR)
+        self.assertEqual(invalidate.kind, DecisionKind.INVALIDATE)
+        self.assertEqual(unsupported.kind, DecisionKind.UNSUPPORTED)
+        self.assertEqual(str(preserve), "no intersection")
+        self.assertEqual(preserve.certificate.shape, "shape_a")
+        self.assertEqual(repair.certificate.repair_program, "sum_delta")
+
+    def test_process_event_returns_preserve_decision(self):
+        shape = QueryShape(
+            name="revenue_by_customer_paid",
+            relation="orders",
+            predicate_cols={"status"},
+            aggregate_cols={"amount"},
+            group_cols={"customer_id"},
+        )
+        cache = AggregateCache(values={"c1": 100})
+        event = WriteEvent(
+            relation="orders",
+            changed_cols={"shipping_address"},
+            old={"customer_id": "c1", "status": "paid", "amount": 100},
+            new={"customer_id": "c1", "status": "paid", "amount": 100},
+        )
+
+        decision = process_event(shape, cache, event)
+
+        self.assertEqual(decision.kind, DecisionKind.PRESERVE)
+        self.assertEqual(cache.values, {"c1": 100})
+        self.assertIn("disjoint_columns", decision.reason)
+
+    def test_process_event_returns_repair_decision(self):
+        shape = QueryShape(
+            name="revenue_by_customer_paid",
+            relation="orders",
+            predicate_cols={"status"},
+            aggregate_cols={"amount"},
+            group_cols={"customer_id"},
+        )
+        cache = AggregateCache(values={"c1": 100})
+        event = WriteEvent(
+            relation="orders",
+            changed_cols={"amount"},
+            old={"customer_id": "c1", "status": "paid", "amount": 100},
+            new={"customer_id": "c1", "status": "paid", "amount": 150},
+        )
+
+        decision = process_event(shape, cache, event)
+
+        self.assertEqual(decision.kind, DecisionKind.REPAIR)
+        self.assertEqual(decision.certificate.repair_program, "paid_sum_by_group_key")
+        self.assertEqual(cache.values, {"c1": 150})
+
     def test_calculate_entropy(self):
         shape_hits = {"shape_a": 10, "shape_b": 10}
         entropy = calculate_entropy(shape_hits)
@@ -36,133 +98,27 @@ class TestSmplcache(unittest.TestCase):
         shape_hits_zero = {"shape_a": 0}
         self.assertEqual(calculate_entropy(shape_hits_zero), 0.0)
 
-    def test_calculate_invalidation_graph(self):
+    def test_calculate_topomap(self):
         shapes = ["shape_a", "shape_b", "shape_c"]
         # a <-> b, b <-> c (chain)
         correlations = [
             ("shape_a <-> shape_b", 5),
             ("shape_b <-> shape_c", 3)
         ]
-        topomap = calculate_invalidation_graph(shapes, correlations)
+        topomap = calculate_topomap(shapes, correlations)
         
         self.assertEqual(topomap["active_nodes"], 3)
         self.assertEqual(topomap["edges"], 2)
         self.assertEqual(topomap["components"], 1)
-        # cycles = E - V + C = 2 - 3 + 1 = 0
-        self.assertEqual(topomap["cycles"], 0)
+        # beta_1 = E - V + C = 2 - 3 + 1 = 0
+        self.assertEqual(topomap["beta_1"], 0)
         
         # a <-> b, b <-> c, c <-> a (triangle)
         correlations.append(("shape_c <-> shape_a", 2))
-        topomap_cycle = calculate_invalidation_graph(shapes, correlations)
+        topomap_cycle = calculate_topomap(shapes, correlations)
         self.assertEqual(topomap_cycle["edges"], 3)
-        # cycles = 3 - 3 + 1 = 1
-        self.assertEqual(topomap_cycle["cycles"], 1)
-
-    def test_evidence_rejection(self):
-        shape = QueryShape(
-            name="rev", relation="orders",
-            predicate_cols={"status"}, aggregate_cols={"amount"},
-            group_cols={"customer_id"},
-            required_evidence=EvidenceLevel.E2,
-            repair_class=RepairClass.SINGLE_TABLE_GROUP_SUM
-        )
-        event = WriteEvent("orders", {"amount"}, {}, {}, evidence_level=EvidenceLevel.E0)
-        verdict = classify_repairability(shape, event)
-        self.assertEqual(verdict.action, "invalidate")
-        self.assertEqual(verdict.decision, "INVALIDATE")
-        self.assertEqual(verdict.authority, Authority.CERTIFICATE)
-        self.assertEqual(verdict.operator, "evidence_insufficient")
-        self.assertFalse(verdict.evidence_met)
-        self.assertTrue(verdict.fingerprint_hit)
-        self.assertIn("evidence_insufficient", verdict.proof_tags)
-
-    def test_invalidate_only_class(self):
-        shape = QueryShape(
-            name="dash", relation="orders",
-            predicate_cols={"status"}, aggregate_cols=set(),
-            group_cols=set(),
-            required_evidence=EvidenceLevel.E1,
-            repair_class=RepairClass.INVALIDATE_ONLY
-        )
-        event = WriteEvent("orders", {"status"}, {}, {}, evidence_level=EvidenceLevel.E3)
-        verdict = classify_repairability(shape, event)
-        self.assertEqual(verdict.action, "invalidate")
-        self.assertEqual(verdict.decision, "INVALIDATE")
-        self.assertEqual(verdict.authority, Authority.CERTIFICATE)
-        self.assertTrue(verdict.evidence_met)
-        self.assertTrue(verdict.fingerprint_hit)
-        self.assertIn("invalidate-only", verdict.reason)
-        self.assertIn("repair_class_invalidate_only", verdict.proof_tags)
-
-    def test_repairable_sum(self):
-        shape = QueryShape(
-            name="rev", relation="orders",
-            predicate_cols={"status"}, aggregate_cols={"amount"},
-            group_cols={"customer_id"},
-            required_evidence=EvidenceLevel.E2,
-            repair_class=RepairClass.SINGLE_TABLE_GROUP_SUM
-        )
-        event = WriteEvent("orders", {"amount"}, {"amount": 100}, {"amount": 150}, evidence_level=EvidenceLevel.E3)
-        verdict = classify_repairability(shape, event)
-        self.assertEqual(verdict.action, "repair")
-        self.assertEqual(verdict.decision, "REPAIR")
-        self.assertEqual(verdict.authority, Authority.CERTIFICATE)
-        self.assertEqual(verdict.repair_class, RepairClass.SINGLE_TABLE_GROUP_SUM)
-        self.assertEqual(verdict.operator, "aggregate_delta")
-        self.assertTrue(verdict.evidence_met)
-        self.assertTrue(verdict.fingerprint_hit)
-        self.assertIn("old_new_values_present", verdict.proof_tags)
-        self.assertIn("aggregate_column_present", verdict.proof_tags)
-
-    def test_preserve_no_intersection(self):
-        shape = QueryShape(
-            name="rev", relation="orders",
-            predicate_cols={"status"}, aggregate_cols={"amount"},
-            group_cols={"customer_id"},
-            required_evidence=EvidenceLevel.E2,
-            repair_class=RepairClass.SINGLE_TABLE_GROUP_SUM
-        )
-        event = WriteEvent("orders", {"shipping_address"}, {}, {}, evidence_level=EvidenceLevel.E3)
-        verdict = classify_repairability(shape, event)
-        self.assertEqual(verdict.action, "preserve")
-        self.assertFalse(verdict.fingerprint_hit)
-
-    def test_preserve_different_relation(self):
-        shape = QueryShape(
-            name="inv", relation="inventory",
-            predicate_cols=set(), aggregate_cols={"quantity"},
-            group_cols={"item_id"},
-            required_evidence=EvidenceLevel.E2,
-            repair_class=RepairClass.SINGLE_TABLE_GROUP_SUM
-        )
-        event = WriteEvent("orders", {"status"}, {}, {}, evidence_level=EvidenceLevel.E3)
-        verdict = classify_repairability(shape, event)
-        self.assertEqual(verdict.action, "preserve")
-        self.assertEqual(verdict.authority, Authority.CERTIFICATE)
-        self.assertEqual(verdict.operator, "relation_mismatch")
-
-    def test_decision_packet_proof_tags(self):
-        shape = QueryShape(
-            name="rev", relation="orders",
-            predicate_cols={"status"}, aggregate_cols={"amount"},
-            group_cols={"customer_id"},
-            required_evidence=EvidenceLevel.E2,
-            repair_class=RepairClass.SINGLE_TABLE_GROUP_SUM
-        )
-        # Group key movement
-        event = WriteEvent(
-            "orders", {"customer_id"},
-            {"customer_id": "c1", "amount": 100},
-            {"customer_id": "c3", "amount": 100},
-            evidence_level=EvidenceLevel.E3
-        )
-        verdict = classify_repairability(shape, event)
-        self.assertEqual(verdict.decision, "REPAIR")
-        self.assertEqual(verdict.operator, "group_key_movement")
-        self.assertIn("group_key_changed", verdict.proof_tags)
-        self.assertIn("old_new_values_present", verdict.proof_tags)
-        self.assertIn("aggregate_column_present", verdict.proof_tags)
-        self.assertEqual(verdict.fallback, "INVALIDATE")
+        # beta_1 = 3 - 3 + 1 = 1
+        self.assertEqual(topomap_cycle["beta_1"], 1)
 
 if __name__ == "__main__":
     unittest.main()

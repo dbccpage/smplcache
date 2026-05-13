@@ -8,21 +8,63 @@ PostgreSQL is not required because the demo starts at the point where a CDC even
 has already been decoded into relation, changed columns, old row, and new row.
 """
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
-from enum import IntEnum, Enum
 
-class EvidenceLevel(IntEnum):
-    E0 = 0  # changed column names only
-    E1 = 1  # changed columns + new values
-    E2 = 2  # old + new values for required columns
-    E3 = 3  # full before/after row images + commit metadata
 
-class RepairClass(str, Enum):
-    SINGLE_TABLE_GROUP_SUM = "SINGLE_TABLE_GROUP_SUM"
-    SINGLE_TABLE_GROUP_COUNT = "SINGLE_TABLE_GROUP_COUNT"
-    INNER_JOIN_KEY_PRESERVING_SUM = "INNER_JOIN_KEY_PRESERVING_SUM"
-    LEFT_JOIN_AGGREGATE_SAFE = "LEFT_JOIN_AGGREGATE_SAFE"
-    INVALIDATE_ONLY = "INVALIDATE_ONLY"
+class DecisionKind(str, Enum):
+    PRESERVE = "preserve"
+    REPAIR = "repair"
+    INVALIDATE = "invalidate"
+    UNSUPPORTED = "unsupported"
+
+
+@dataclass
+class Certificate:
+    shape: str
+    event_id: str
+    relation: str
+    decision_kind: DecisionKind
+    reason_code: str
+    required_evidence: list[str] = field(default_factory=list)
+    available_evidence: list[str] = field(default_factory=list)
+    repair_program: str | None = None
+    boundary_clock: str | None = None
+
+
+@dataclass(frozen=True)
+class Decision:
+    kind: DecisionKind
+    reason: str
+    certificate: Certificate
+
+    @classmethod
+    def preserve(cls, reason: str, cert: Certificate) -> "Decision":
+        cert.decision_kind = DecisionKind.PRESERVE
+        cert.reason_code = reason
+        return cls(DecisionKind.PRESERVE, reason, cert)
+
+    @classmethod
+    def repair(cls, reason: str, cert: Certificate) -> "Decision":
+        cert.decision_kind = DecisionKind.REPAIR
+        cert.reason_code = reason
+        return cls(DecisionKind.REPAIR, reason, cert)
+
+    @classmethod
+    def invalidate(cls, reason: str, cert: Certificate) -> "Decision":
+        cert.decision_kind = DecisionKind.INVALIDATE
+        cert.reason_code = reason
+        return cls(DecisionKind.INVALIDATE, reason, cert)
+
+    @classmethod
+    def unsupported(cls, reason: str, cert: Certificate) -> "Decision":
+        cert.decision_kind = DecisionKind.UNSUPPORTED
+        cert.reason_code = reason
+        return cls(DecisionKind.UNSUPPORTED, reason, cert)
+
+    def __str__(self) -> str:
+        return self.reason
+
 
 @dataclass
 class QueryShape:
@@ -34,8 +76,6 @@ class QueryShape:
     projection_cols: set[str] = field(default_factory=set)
     join_cols: set[str] = field(default_factory=set)
     security_cols: set[str] = field(default_factory=set)
-    required_evidence: EvidenceLevel = EvidenceLevel.E2
-    repair_class: RepairClass = RepairClass.INVALIDATE_ONLY
 
     @property
     def fingerprint(self) -> set[str]:
@@ -48,13 +88,22 @@ class QueryShape:
             | self.security_cols
         )
 
+
 @dataclass
 class WriteEvent:
     relation: str
     changed_cols: set[str]
     old: dict[str, Any]
     new: dict[str, Any]
-    evidence_level: EvidenceLevel = EvidenceLevel.E3
+    event_id: str = "unknown"
+
+    @property
+    def operation(self) -> str:
+        if not self.old and self.new:
+            return "INSERT"
+        elif self.old and not self.new:
+            return "DELETE"
+        return "UPDATE"
 
 
 @dataclass
@@ -74,176 +123,84 @@ def row_matches_paid(row: dict[str, Any]) -> bool:
     return row.get("status") == "paid"
 
 
-class Authority(str, Enum):
-    DIAGNOSTIC = "diagnostic"   # informational only, no action authority
-    PROPOSAL = "proposal"       # suggested action, needs human approval
-    CERTIFICATE = "certificate" # machine-checkable decision, safe to execute
+def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
+    cert = Certificate(
+        shape=shape.name,
+        event_id=event.event_id,
+        relation=event.relation,
+        decision_kind=DecisionKind.PRESERVE,
+        reason_code=""
+    )
 
-
-@dataclass
-class DecisionPacket:
-    decision: str           # "PRESERVE" | "REPAIR" | "INVALIDATE"
-    authority: Authority
-    shape: str
-    event_relation: str
-    evidence_level: EvidenceLevel
-    required_evidence: EvidenceLevel
-    repair_class: RepairClass | None = None
-    operator: str = ""
-    reason: str = ""
-    proof_tags: list[str] = field(default_factory=list)
-    fallback: str = "INVALIDATE"
-    # backward compat fields
-    evidence_met: bool = True
-    fingerprint_hit: bool = False
-
-    @property
-    def action(self) -> str:
-        return self.decision.lower()
-
-
-# Backward compatibility alias
-RepairVerdict = DecisionPacket
-
-
-def _collect_proof_tags(shape: 'QueryShape', event: 'WriteEvent') -> list[str]:
-    tags = []
-    if event.old:
-        tags.append("old_values_present")
-    if event.new:
-        tags.append("new_values_present")
-    if event.old and event.new:
-        tags.append("old_new_values_present")
-    if shape.predicate_cols & event.changed_cols:
-        tags.append("predicate_boundary_checked")
-    if shape.group_cols & event.changed_cols:
-        tags.append("group_key_changed")
-    elif shape.group_cols:
-        tags.append("group_key_present")
-    if shape.aggregate_cols:
-        tags.append("aggregate_column_present")
-    return tags
-
-
-def classify_repairability(shape: 'QueryShape', event: 'WriteEvent') -> DecisionPacket:
     if event.relation != shape.relation:
-        return DecisionPacket(
-            decision="PRESERVE",
-            authority=Authority.CERTIFICATE,
-            shape=shape.name,
-            event_relation=event.relation,
-            evidence_level=event.evidence_level,
-            required_evidence=shape.required_evidence,
-            operator="relation_mismatch",
-            reason="unrelated relation",
-            proof_tags=["relation_mismatch"],
-            fallback="PRESERVE"
-        )
+        return Decision.preserve("unrelated_relation", cert)
 
     intersection = shape.fingerprint & event.changed_cols
     if not intersection:
-        return DecisionPacket(
-            decision="PRESERVE",
-            authority=Authority.CERTIFICATE,
-            shape=shape.name,
-            event_relation=event.relation,
-            evidence_level=event.evidence_level,
-            required_evidence=shape.required_evidence,
-            operator="fingerprint_miss",
-            reason=f"changed {event.changed_cols} does not intersect {shape.fingerprint}",
-            proof_tags=["fingerprint_miss"],
-            fallback="PRESERVE"
-        )
+        return Decision.preserve("disjoint_columns", cert)
 
-    if event.evidence_level < shape.required_evidence:
-        return DecisionPacket(
-            decision="INVALIDATE",
-            authority=Authority.CERTIFICATE,
-            shape=shape.name,
-            event_relation=event.relation,
-            evidence_level=event.evidence_level,
-            required_evidence=shape.required_evidence,
-            operator="evidence_insufficient",
-            reason=f"insufficient evidence (have {event.evidence_level.name}, need {shape.required_evidence.name})",
-            proof_tags=["evidence_insufficient"],
-            fallback="INVALIDATE",
-            evidence_met=False,
-            fingerprint_hit=True
-        )
+    # For aggregate columns
+    if shape.aggregate_cols:
+        # Check unsupported MIN/MAX
+        for agg in shape.aggregate_cols:
+            if "min" in agg.lower() or "max" in agg.lower():
+                cert.required_evidence = ["auxiliary_extremum_state"]
+                return Decision.unsupported("min_max_requires_auxiliary_state", cert)
 
-    if shape.repair_class == RepairClass.INVALIDATE_ONLY:
-        return DecisionPacket(
-            decision="INVALIDATE",
-            authority=Authority.CERTIFICATE,
-            shape=shape.name,
-            event_relation=event.relation,
-            evidence_level=event.evidence_level,
-            required_evidence=shape.required_evidence,
-            repair_class=RepairClass.INVALIDATE_ONLY,
-            operator="invalidate_only_class",
-            reason="shape is invalidate-only",
-            proof_tags=["repair_class_invalidate_only"],
-            fallback="INVALIDATE",
-            evidence_met=True,
-            fingerprint_hit=True
-        )
+        old_matches = row_matches_paid(event.old) if event.old else False
+        new_matches = row_matches_paid(event.new) if event.new else False
+        
+        has_predicate_exit = old_matches and not new_matches
+        has_predicate_entry = not old_matches and new_matches
+        
+        required_evidence = ["amount", "customer_id", "status"]
+        cert.required_evidence = required_evidence
+        
+        avail_evidence = list((event.old or {}).keys()) + list((event.new or {}).keys())
+        cert.available_evidence = sorted(list(set(avail_evidence)))
+        
+        # Theorem 7 Evidence check
+        if any(req not in cert.available_evidence for req in required_evidence):
+            return Decision.invalidate("missing_evidence_for_repair", cert)
 
-    proof_tags = _collect_proof_tags(shape, event)
+        cert.repair_program = "paid_sum_by_group_key"
+        
+        if event.operation == "UPDATE" and old_matches == new_matches and (event.old or {}).get("customer_id") == (event.new or {}).get("customer_id"):
+             if (event.old or {}).get("amount") == (event.new or {}).get("amount"):
+                 return Decision.preserve("noop_update", cert)
+             else:
+                 return Decision.repair("value_change", cert)
 
-    # Determine operator from changed columns
-    predicate_changed = bool(shape.predicate_cols & event.changed_cols)
-    group_key_changed = bool(shape.group_cols & event.changed_cols)
-    aggregate_changed = bool(shape.aggregate_cols & event.changed_cols)
+        if has_predicate_entry:
+             return Decision.repair("predicate_entry", cert)
+        if has_predicate_exit:
+             return Decision.repair("predicate_exit", cert)
+             
+        if (event.old or {}).get("customer_id") != (event.new or {}).get("customer_id"):
+             return Decision.repair("group_move", cert)
+             
+        return Decision.repair(event.operation.lower(), cert)
 
-    if group_key_changed:
-        operator = "group_key_movement"
-    elif predicate_changed:
-        operator = "predicate_boundary_crossing"
-    elif aggregate_changed:
-        operator = "aggregate_delta"
-    else:
-        operator = "generic_repair"
-
-    return DecisionPacket(
-        decision="REPAIR",
-        authority=Authority.CERTIFICATE,
-        shape=shape.name,
-        event_relation=event.relation,
-        evidence_level=event.evidence_level,
-        required_evidence=shape.required_evidence,
-        repair_class=shape.repair_class,
-        operator=operator,
-        reason=f"repairable via {shape.repair_class.value}",
-        proof_tags=proof_tags,
-        fallback="INVALIDATE",
-        evidence_met=True,
-        fingerprint_hit=True
-    )
+    return Decision.invalidate("shape_intersected", cert)
 
 
-def process_event(shape: QueryShape, cache: AggregateCache, event: WriteEvent) -> str:
-    verdict = classify_repairability(shape, event)
+def process_event(shape: QueryShape, cache: AggregateCache, event: WriteEvent) -> Decision:
+    decision = certify_event(shape, event)
+    
+    if decision.kind == DecisionKind.REPAIR:
+        old_matches = row_matches_paid(event.old) if event.old else False
+        new_matches = row_matches_paid(event.new) if event.new else False
 
-    if verdict.action == "preserve":
-        return f"preserved: {verdict.reason}"
+        old_customer = (event.old or {}).get("customer_id")
+        new_customer = (event.new or {}).get("customer_id")
 
-    if verdict.action == "invalidate":
-        return f"invalidated: {verdict.reason}"
+        old_amount = int((event.old or {}).get("amount", 0))
+        new_amount = int((event.new or {}).get("amount", 0))
 
-    # Repair path — apply incremental update
-    old_matches = row_matches_paid(event.old)
-    new_matches = row_matches_paid(event.new)
+        if old_matches:
+            cache.sub(old_customer, old_amount)
 
-    old_customer = event.old.get("customer_id")
-    new_customer = event.new.get("customer_id")
+        if new_matches:
+            cache.add(new_customer, new_amount)
 
-    old_amount = int(event.old.get("amount", 0))
-    new_amount = int(event.new.get("amount", 0))
-
-    if old_matches:
-        cache.sub(old_customer, old_amount)
-
-    if new_matches:
-        cache.add(new_customer, new_amount)
-
-    return "incrementally updated"
+    return decision
