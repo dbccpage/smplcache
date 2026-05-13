@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "smpl_evidence",
+    "smpl_cert",
+    "smpl_repair",
+    "smpl_dual",
+    "smpl_geometry",
+]

@@ -1,0 +1,11 @@
+[package]
+name = "smpl_dual"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime budget control via dual prices for smplcache"
+license = "Apache-2.0"
+
+[dependencies]
+smpl_cert = { path = "../smpl_cert" }
+smpl_evidence = { path = "../smpl_evidence" }
+serde = { version = "1", features = ["derive"] }

@@ -59,6 +59,27 @@
             "items": {
               "type": "string"
             }
+          },
+          "required_evidence": {
+            "type": "string",
+            "enum": ["E0", "E1", "E2", "E3"],
+            "default": "E2"
+          },
+          "repair_class": {
+            "type": "string",
+            "enum": [
+              "SINGLE_TABLE_GROUP_SUM",
+              "SINGLE_TABLE_GROUP_COUNT",
+              "INNER_JOIN_KEY_PRESERVING_SUM",
+              "LEFT_JOIN_AGGREGATE_SAFE",
+              "INVALIDATE_ONLY"
+            ],
+            "default": "INVALIDATE_ONLY"
+          },
+          "aggregate_function": {
+            "type": "string",
+            "enum": ["SUM", "COUNT", "AVG", "MIN", "MAX", "NONE"],
+            "default": "NONE"
           }
         },
         "required": [
@@ -103,6 +124,11 @@
           },
           "new": {
             "type": "object"
+          },
+          "evidence_level": {
+            "type": "string",
+            "enum": ["E0", "E1", "E2", "E3"],
+            "default": "E3"
           }
         },
         "required": [

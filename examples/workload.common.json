@@ -19,7 +19,10 @@
         "customer_id"
       ],
       "join_cols": [],
-      "security_cols": []
+      "security_cols": [],
+      "required_evidence": "E2",
+      "repair_class": "SINGLE_TABLE_GROUP_SUM",
+      "aggregate_function": "SUM"
     },
     {
       "name": "fulfillment_dashboard",
@@ -37,7 +40,9 @@
         "amount"
       ],
       "join_cols": [],
-      "security_cols": []
+      "security_cols": [],
+      "required_evidence": "E2",
+      "repair_class": "INVALIDATE_ONLY"
     },
     {
       "name": "order_detail_view",
@@ -58,6 +63,8 @@
       "security_cols": [
         "customer_id"
       ],
+      "required_evidence": "E1",
+      "repair_class": "INVALIDATE_ONLY",
       "params": {
         "customer_id": {
           "type": "nvarchar(4000)"
@@ -80,7 +87,25 @@
         "item_id"
       ],
       "join_cols": [],
-      "security_cols": []
+      "security_cols": [],
+      "required_evidence": "E2",
+      "repair_class": "SINGLE_TABLE_GROUP_SUM",
+      "aggregate_function": "SUM"
+    },
+    {
+      "name": "order_search_by_name",
+      "shape_hash": "q_hash_order_search_name",
+      "relation": "orders",
+      "query": "SELECT * FROM orders WHERE UPPER(customer_name) = @search_name",
+      "predicate_cols": ["customer_name"],
+      "aggregate_cols": [],
+      "group_cols": [],
+      "projection_cols": [],
+      "join_cols": [],
+      "security_cols": [],
+      "required_evidence": "E1",
+      "repair_class": "INVALIDATE_ONLY",
+      "aggregate_function": "NONE"
     }
   ],
   "events": [
@@ -102,7 +127,8 @@
         "status": "paid",
         "amount": 100,
         "shipping_address": "new"
-      }
+      },
+      "evidence_level": "E3"
     },
     {
       "event_id": 2,
@@ -120,7 +146,8 @@
         "customer_id": "c1",
         "status": "paid",
         "amount": 150
-      }
+      },
+      "evidence_level": "E3"
     },
     {
       "event_id": 3,
@@ -138,7 +165,8 @@
         "customer_id": "c2",
         "status": "paid",
         "amount": 80
-      }
+      },
+      "evidence_level": "E3"
     },
     {
       "event_id": 4,
@@ -156,7 +184,8 @@
         "customer_id": "c2",
         "status": "cancelled",
         "amount": 80
-      }
+      },
+      "evidence_level": "E3"
     },
     {
       "event_id": 5,
@@ -174,7 +203,8 @@
         "customer_id": "c3",
         "status": "paid",
         "amount": 150
-      }
+      },
+      "evidence_level": "E3"
     },
     {
       "event_id": 6,
@@ -190,7 +220,8 @@
       "new": {
         "item_id": "item_42",
         "quantity": 40
-      }
+      },
+      "evidence_level": "E3"
     },
     {
       "event_id": 7,
@@ -206,7 +237,19 @@
       "new": {
         "id": "c1",
         "email": "new@example.com"
-      }
+      },
+      "evidence_level": "E3"
+    },
+    {
+      "event_id": 8,
+      "relation": "orders",
+      "operation": "UPDATE",
+      "changed_cols": [
+        "amount"
+      ],
+      "old": {},
+      "new": {},
+      "evidence_level": "E0"
     }
   ],
   "schema": {
