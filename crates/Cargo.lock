@@ -84,11 +84,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "smpl_contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "smpl_cert",
+ "smpl_evidence",
+]
+
+[[package]]
 name = "smpl_dual"
 version = "0.1.0"
 dependencies = [
  "serde",
  "smpl_cert",
+ "smpl_contract",
  "smpl_evidence",
 ]
 
@@ -106,6 +116,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "smpl_cert",
+ "smpl_contract",
  "smpl_evidence",
 ]
 

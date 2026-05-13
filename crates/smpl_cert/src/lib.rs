@@ -86,6 +86,18 @@ impl RepairClass {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RepairOperator {
+    RelationMismatch,
+    FingerprintMiss,
+    EvidenceInsufficient,
+    InvalidateOnlyClass,
+    AggregateDelta,
+    PredicateBoundaryCrossing,
+    GroupKeyMovement,
+    GenericRepair,
+}
+
 // ─── Aggregate Function ────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -141,7 +153,7 @@ pub struct DecisionPacket {
     pub evidence_level: EvidenceLevel,
     pub required_evidence: EvidenceLevel,
     pub repair_class: RepairClass,
-    pub operator: String,
+    pub operator: RepairOperator,
     pub reason: String,
     pub proof_tags: Vec<String>,
     pub fallback: Decision,
@@ -204,7 +216,7 @@ pub fn classify(shape: &QueryShape, packet: &EvidencePacket) -> DecisionPacket {
             evidence_level: event.evidence_level,
             required_evidence: shape.required_evidence,
             repair_class: shape.repair_class,
-            operator: "relation_mismatch".into(),
+            operator: RepairOperator::RelationMismatch,
             reason: "unrelated relation".into(),
             proof_tags: vec!["relation_mismatch".into()],
             fallback: Decision::Preserve,
@@ -227,7 +239,7 @@ pub fn classify(shape: &QueryShape, packet: &EvidencePacket) -> DecisionPacket {
             evidence_level: event.evidence_level,
             required_evidence: shape.required_evidence,
             repair_class: shape.repair_class,
-            operator: "fingerprint_miss".into(),
+            operator: RepairOperator::FingerprintMiss,
             reason: "changed columns do not intersect fingerprint".into(),
             proof_tags: vec!["fingerprint_miss".into()],
             fallback: Decision::Preserve,
@@ -244,7 +256,7 @@ pub fn classify(shape: &QueryShape, packet: &EvidencePacket) -> DecisionPacket {
             evidence_level: event.evidence_level,
             required_evidence: shape.required_evidence,
             repair_class: shape.repair_class,
-            operator: "evidence_insufficient".into(),
+            operator: RepairOperator::EvidenceInsufficient,
             reason: format!(
                 "insufficient evidence (have {}, need {})",
                 event.evidence_level.name(),
@@ -265,7 +277,7 @@ pub fn classify(shape: &QueryShape, packet: &EvidencePacket) -> DecisionPacket {
             evidence_level: event.evidence_level,
             required_evidence: shape.required_evidence,
             repair_class: shape.repair_class,
-            operator: "invalidate_only_class".into(),
+            operator: RepairOperator::InvalidateOnlyClass,
             reason: "shape is invalidate-only".into(),
             proof_tags: vec!["repair_class_invalidate_only".into()],
             fallback: Decision::Invalidate,
@@ -289,13 +301,13 @@ pub fn classify(shape: &QueryShape, packet: &EvidencePacket) -> DecisionPacket {
         .any(|c| event.changed_cols.contains(c));
 
     let operator = if group_key_changed {
-        "group_key_movement"
+        RepairOperator::GroupKeyMovement
     } else if predicate_changed {
-        "predicate_boundary_crossing"
+        RepairOperator::PredicateBoundaryCrossing
     } else if aggregate_changed {
-        "aggregate_delta"
+        RepairOperator::AggregateDelta
     } else {
-        "generic_repair"
+        RepairOperator::GenericRepair
     };
 
     DecisionPacket {
@@ -388,7 +400,7 @@ mod tests {
         let result = classify(&shape, &packet);
         assert_eq!(result.decision, Decision::Preserve);
         assert_eq!(result.authority, Authority::Certificate);
-        assert_eq!(result.operator, "relation_mismatch");
+        assert_eq!(result.operator, RepairOperator::RelationMismatch);
     }
 
     #[test]
@@ -402,7 +414,7 @@ mod tests {
         );
         let result = classify(&shape, &packet);
         assert_eq!(result.decision, Decision::Preserve);
-        assert_eq!(result.operator, "fingerprint_miss");
+        assert_eq!(result.operator, RepairOperator::FingerprintMiss);
     }
 
     #[test]
@@ -413,7 +425,7 @@ mod tests {
         let result = classify(&shape, &packet);
         assert_eq!(result.decision, Decision::Invalidate);
         assert_eq!(result.authority, Authority::Certificate);
-        assert_eq!(result.operator, "evidence_insufficient");
+        assert_eq!(result.operator, RepairOperator::EvidenceInsufficient);
         assert!(!result.evidence_level.satisfies(shape.required_evidence));
         assert!(result.proof_tags.contains(&"evidence_insufficient".into()));
     }
@@ -430,7 +442,7 @@ mod tests {
         let result = classify(&shape, &packet);
         assert_eq!(result.decision, Decision::Invalidate);
         assert_eq!(result.authority, Authority::Certificate);
-        assert_eq!(result.operator, "invalidate_only_class");
+        assert_eq!(result.operator, RepairOperator::InvalidateOnlyClass);
         assert!(result.proof_tags.contains(&"repair_class_invalidate_only".into()));
     }
 
@@ -447,7 +459,7 @@ mod tests {
         assert_eq!(result.decision, Decision::Repair);
         assert_eq!(result.authority, Authority::Certificate);
         assert_eq!(result.repair_class, RepairClass::SingleTableGroupSum);
-        assert_eq!(result.operator, "aggregate_delta");
+        assert_eq!(result.operator, RepairOperator::AggregateDelta);
         assert!(result.proof_tags.contains(&"old_new_values_present".into()));
         assert!(result.proof_tags.contains(&"aggregate_column_present".into()));
     }
@@ -471,7 +483,7 @@ mod tests {
         );
         let result = classify(&shape, &packet);
         assert_eq!(result.decision, Decision::Repair);
-        assert_eq!(result.operator, "predicate_boundary_crossing");
+        assert_eq!(result.operator, RepairOperator::PredicateBoundaryCrossing);
         assert!(result.proof_tags.contains(&"predicate_boundary_checked".into()));
     }
 
@@ -486,7 +498,7 @@ mod tests {
         );
         let result = classify(&shape, &packet);
         assert_eq!(result.decision, Decision::Repair);
-        assert_eq!(result.operator, "group_key_movement");
+        assert_eq!(result.operator, RepairOperator::GroupKeyMovement);
         assert!(result.proof_tags.contains(&"group_key_changed".into()));
     }
 }

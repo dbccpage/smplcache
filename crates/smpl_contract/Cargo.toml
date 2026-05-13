@@ -1,0 +1,11 @@
+[package]
+name = "smpl_contract"
+version = "0.1.0"
+edition = "2021"
+description = "Public response contracts and numeric boundaries for smplcache"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+smpl_evidence = { path = "../smpl_evidence" }
+smpl_cert = { path = "../smpl_cert" }

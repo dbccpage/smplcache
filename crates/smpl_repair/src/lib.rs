@@ -13,8 +13,9 @@
 //!   - Invalidation fallback (DELETE cached entry)
 
 use serde::{Deserialize, Serialize};
-use smpl_cert::{AggregateFunction, DecisionPacket, Decision, QueryShape};
+use smpl_cert::{AggregateFunction, Authority, DecisionPacket, Decision, QueryShape};
 use smpl_evidence::{BoundaryEvent, Value};
+use std::collections::BTreeMap;
 
 // ─── Repair Scenario ───────────────────────────────────────────
 
@@ -45,56 +46,79 @@ pub enum RepairScenario {
     Preserve,
 }
 
+// ─── SQL Statement ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SqlStatement {
+    pub sql: String,
+    pub params: BTreeMap<String, Value>,
+}
+
 // ─── Repair Plan ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RepairPlan {
     pub packet: DecisionPacket,
     pub scenario: RepairScenario,
-    pub statements: Vec<String>,
+    pub statements: Vec<SqlStatement>,
     pub shape_hash: String,
 }
 
 // ─── SQL Emitters ──────────────────────────────────────────────
 
 pub trait RepairEmitter {
-    fn emit(&self, plan: &RepairPlan, shape: &QueryShape) -> Vec<String>;
+    fn emit(&self, plan: &RepairPlan, shape: &QueryShape) -> Vec<SqlStatement>;
 }
 
 pub struct SqlServerEmitter;
 pub struct PostgresEmitter;
 
 impl SqlServerEmitter {
-    fn merge_stmt(shape_hash: &str, group_col: &str, delta: &str) -> String {
-        format!(
-            "MERGE dbo.cached_aggregates AS target\n\
-             USING (SELECT '{shape_hash}' AS shape_hash, @{group_col} AS group_key, {delta} AS delta_value) AS src\n\
-             ON target.shape_hash = src.shape_hash\n\
-             AND target.group_key = src.group_key\n\
-             WHEN MATCHED THEN\n\
-             \x20   UPDATE SET value = value + src.delta_value\n\
-             WHEN NOT MATCHED THEN\n\
-             \x20   INSERT (shape_hash, group_key, value)\n\
-             \x20   VALUES (src.shape_hash, src.group_key, src.delta_value);"
-        )
+    fn merge_stmt(shape_hash: &str, group_col: &str, delta_expr: &str, params: BTreeMap<String, Value>) -> SqlStatement {
+        let mut p = params;
+        p.insert("shape_hash".into(), Value::Text(shape_hash.into()));
+        SqlStatement {
+            sql: format!(
+                "MERGE dbo.cached_aggregates AS target\n\
+                 USING (SELECT @shape_hash AS shape_hash, @{group_col} AS group_key, {delta_expr} AS delta_value) AS src\n\
+                 ON target.shape_hash = src.shape_hash\n\
+                 AND target.group_key = src.group_key\n\
+                 WHEN MATCHED THEN\n\
+                 \x20   UPDATE SET value = value + src.delta_value\n\
+                 WHEN NOT MATCHED THEN\n\
+                 \x20   INSERT (shape_hash, group_key, value)\n\
+                 \x20   VALUES (src.shape_hash, src.group_key, src.delta_value);"
+            ),
+            params: p,
+        }
     }
 
-    fn update_stmt(shape_hash: &str, group_col: &str, delta: &str) -> String {
-        format!(
-            "UPDATE dbo.cached_aggregates\n\
-             SET value = value + ({delta})\n\
-             WHERE shape_hash = '{shape_hash}'\n\
-             \x20 AND group_key = @{group_col};"
-        )
+    fn update_stmt(shape_hash: &str, group_col: &str, delta_expr: &str, params: BTreeMap<String, Value>) -> SqlStatement {
+        let mut p = params;
+        p.insert("shape_hash".into(), Value::Text(shape_hash.into()));
+        SqlStatement {
+            sql: format!(
+                "UPDATE dbo.cached_aggregates\n\
+                 SET value = value + ({delta_expr})\n\
+                 WHERE shape_hash = @shape_hash\n\
+                 \x20 AND group_key = @{group_col};"
+            ),
+            params: p,
+        }
     }
 
-    fn delete_stmt(shape_hash: &str) -> String {
-        format!("DELETE FROM dbo.cached_aggregates WHERE shape_hash = '{shape_hash}';")
+    fn delete_stmt(shape_hash: &str) -> SqlStatement {
+        let mut p = BTreeMap::new();
+        p.insert("shape_hash".into(), Value::Text(shape_hash.into()));
+        SqlStatement {
+            sql: "DELETE FROM dbo.cached_aggregates WHERE shape_hash = @shape_hash;".into(),
+            params: p,
+        }
     }
 }
 
 impl RepairEmitter for SqlServerEmitter {
-    fn emit(&self, plan: &RepairPlan, shape: &QueryShape) -> Vec<String> {
+    fn emit(&self, plan: &RepairPlan, shape: &QueryShape) -> Vec<SqlStatement> {
         let hash = &plan.shape_hash;
         let group_col = shape
             .group_cols
@@ -109,39 +133,47 @@ impl RepairEmitter for SqlServerEmitter {
             }
             RepairScenario::Preserve => vec![],
             RepairScenario::AggregateDelta { delta, .. } => {
-                vec![Self::update_stmt(hash, group_col, &delta.to_string())]
+                let mut p = BTreeMap::new();
+                p.insert("delta".into(), Value::Int(*delta));
+                vec![Self::update_stmt(hash, group_col, "@delta", p)]
             }
             RepairScenario::CountAdjust { direction } => {
-                vec![Self::update_stmt(hash, group_col, &direction.to_string())]
+                let mut p = BTreeMap::new();
+                p.insert("delta".into(), Value::Int(*direction as i64));
+                vec![Self::update_stmt(hash, group_col, "@delta", p)]
             }
             RepairScenario::PredicateBoundaryCrossing { .. } => {
-                let delta = match shape.aggregate_function {
+                let delta_expr = match shape.aggregate_function {
                     AggregateFunction::Count => "1".to_string(),
                     _ => format!("@{}", shape.aggregate_cols.iter().next().unwrap_or(&"value".to_string())),
                 };
-                vec![Self::merge_stmt(hash, group_col, &delta)]
+                vec![Self::merge_stmt(hash, group_col, &delta_expr, BTreeMap::new())]
             }
             RepairScenario::GroupKeyMovement {
                 group_col: gcol,
                 ..
             } => {
                 let aggr = shape.aggregate_cols.iter().next().map(|s| s.as_str()).unwrap_or("value");
-                let delta = match shape.aggregate_function {
+                let delta_expr = match shape.aggregate_function {
                     AggregateFunction::Count => "1".to_string(),
                     _ => format!("@{aggr}"),
                 };
+                let mut p = BTreeMap::new();
+                p.insert("shape_hash".into(), Value::Text(hash.into()));
+                let mut step2 = Self::merge_stmt(hash, &format!("new_{gcol}"), &delta_expr, BTreeMap::new());
+                step2.sql = format!("-- Step 2: add to new group key\n{}", step2.sql);
                 vec![
-                    format!(
-                        "-- Step 1: subtract from old group key\n\
-                         UPDATE dbo.cached_aggregates\n\
-                         SET value = value - {delta}\n\
-                         WHERE shape_hash = '{hash}'\n\
-                         \x20 AND group_key = @old_{gcol};"
-                    ),
-                    format!(
-                        "-- Step 2: add to new group key\n{}",
-                        Self::merge_stmt(hash, &format!("new_{gcol}"), &delta)
-                    ),
+                    SqlStatement {
+                        sql: format!(
+                            "-- Step 1: subtract from old group key\n\
+                             UPDATE dbo.cached_aggregates\n\
+                             SET value = value - {delta_expr}\n\
+                             WHERE shape_hash = @shape_hash\n\
+                             \x20 AND group_key = @old_{gcol};"
+                        ),
+                        params: p,
+                    },
+                    step2,
                 ]
             }
         }
@@ -149,31 +181,46 @@ impl RepairEmitter for SqlServerEmitter {
 }
 
 impl PostgresEmitter {
-    fn upsert_stmt(shape_hash: &str, group_col: &str, delta: &str) -> String {
-        format!(
-            "INSERT INTO cached_aggregates (shape_hash, group_key, value)\n\
-             VALUES ('{shape_hash}', @{group_col}, {delta})\n\
-             ON CONFLICT (shape_hash, group_key)\n\
-             DO UPDATE SET value = cached_aggregates.value + EXCLUDED.value;"
-        )
+    fn upsert_stmt(shape_hash: &str, group_col: &str, delta_expr: &str, params: BTreeMap<String, Value>) -> SqlStatement {
+        let mut p = params;
+        p.insert("shape_hash".into(), Value::Text(shape_hash.into()));
+        SqlStatement {
+            sql: format!(
+                "INSERT INTO cached_aggregates (shape_hash, group_key, value)\n\
+                 VALUES (@shape_hash, @{group_col}, {delta_expr})\n\
+                 ON CONFLICT (shape_hash, group_key)\n\
+                 DO UPDATE SET value = cached_aggregates.value + EXCLUDED.value;"
+            ),
+            params: p,
+        }
     }
 
-    fn update_stmt(shape_hash: &str, group_col: &str, delta: &str) -> String {
-        format!(
-            "UPDATE cached_aggregates\n\
-             SET value = value + ({delta})\n\
-             WHERE shape_hash = '{shape_hash}'\n\
-             \x20 AND group_key = @{group_col};"
-        )
+    fn update_stmt(shape_hash: &str, group_col: &str, delta_expr: &str, params: BTreeMap<String, Value>) -> SqlStatement {
+        let mut p = params;
+        p.insert("shape_hash".into(), Value::Text(shape_hash.into()));
+        SqlStatement {
+            sql: format!(
+                "UPDATE cached_aggregates\n\
+                 SET value = value + ({delta_expr})\n\
+                 WHERE shape_hash = @shape_hash\n\
+                 \x20 AND group_key = @{group_col};"
+            ),
+            params: p,
+        }
     }
 
-    fn delete_stmt(shape_hash: &str) -> String {
-        format!("DELETE FROM cached_aggregates WHERE shape_hash = '{shape_hash}';")
+    fn delete_stmt(shape_hash: &str) -> SqlStatement {
+        let mut p = BTreeMap::new();
+        p.insert("shape_hash".into(), Value::Text(shape_hash.into()));
+        SqlStatement {
+            sql: "DELETE FROM cached_aggregates WHERE shape_hash = @shape_hash;".into(),
+            params: p,
+        }
     }
 }
 
 impl RepairEmitter for PostgresEmitter {
-    fn emit(&self, plan: &RepairPlan, shape: &QueryShape) -> Vec<String> {
+    fn emit(&self, plan: &RepairPlan, shape: &QueryShape) -> Vec<SqlStatement> {
         let hash = &plan.shape_hash;
         let group_col = shape
             .group_cols
@@ -188,39 +235,47 @@ impl RepairEmitter for PostgresEmitter {
             }
             RepairScenario::Preserve => vec![],
             RepairScenario::AggregateDelta { delta, .. } => {
-                vec![Self::update_stmt(hash, group_col, &delta.to_string())]
+                let mut p = BTreeMap::new();
+                p.insert("delta".into(), Value::Int(*delta));
+                vec![Self::update_stmt(hash, group_col, "@delta", p)]
             }
             RepairScenario::CountAdjust { direction } => {
-                vec![Self::update_stmt(hash, group_col, &direction.to_string())]
+                let mut p = BTreeMap::new();
+                p.insert("delta".into(), Value::Int(*direction as i64));
+                vec![Self::update_stmt(hash, group_col, "@delta", p)]
             }
             RepairScenario::PredicateBoundaryCrossing { .. } => {
-                let delta = match shape.aggregate_function {
+                let delta_expr = match shape.aggregate_function {
                     AggregateFunction::Count => "1".to_string(),
                     _ => format!("@{}", shape.aggregate_cols.iter().next().unwrap_or(&"value".to_string())),
                 };
-                vec![Self::upsert_stmt(hash, group_col, &delta)]
+                vec![Self::upsert_stmt(hash, group_col, &delta_expr, BTreeMap::new())]
             }
             RepairScenario::GroupKeyMovement {
                 group_col: gcol,
                 ..
             } => {
                 let aggr = shape.aggregate_cols.iter().next().map(|s| s.as_str()).unwrap_or("value");
-                let delta = match shape.aggregate_function {
+                let delta_expr = match shape.aggregate_function {
                     AggregateFunction::Count => "1".to_string(),
                     _ => format!("@{aggr}"),
                 };
+                let mut p = BTreeMap::new();
+                p.insert("shape_hash".into(), Value::Text(hash.into()));
+                let mut step2 = Self::upsert_stmt(hash, &format!("new_{gcol}"), &delta_expr, BTreeMap::new());
+                step2.sql = format!("-- Step 2: add to new group key\n{}", step2.sql);
                 vec![
-                    format!(
-                        "-- Step 1: subtract from old group key\n\
-                         UPDATE cached_aggregates\n\
-                         SET value = value - {delta}\n\
-                         WHERE shape_hash = '{hash}'\n\
-                         \x20 AND group_key = @old_{gcol};"
-                    ),
-                    format!(
-                        "-- Step 2: add to new group key\n{}",
-                        Self::upsert_stmt(hash, &format!("new_{gcol}"), &delta)
-                    ),
+                    SqlStatement {
+                        sql: format!(
+                            "-- Step 1: subtract from old group key\n\
+                             UPDATE cached_aggregates\n\
+                             SET value = value - {delta_expr}\n\
+                             WHERE shape_hash = @shape_hash\n\
+                             \x20 AND group_key = @old_{gcol};"
+                        ),
+                        params: p,
+                    },
+                    step2,
                 ]
             }
         }
@@ -229,6 +284,22 @@ impl RepairEmitter for PostgresEmitter {
 
 // ─── Plan Builder ──────────────────────────────────────────────
 
+enum RowSide {
+    Old,
+    New,
+}
+
+fn required_value<'a>(
+    event: &'a BoundaryEvent,
+    old_or_new: RowSide,
+    col: &str,
+) -> Option<&'a Value> {
+    match old_or_new {
+        RowSide::Old => event.old.as_ref()?.get(col),
+        RowSide::New => event.new.as_ref()?.get(col),
+    }
+}
+
 /// Build a RepairPlan from a DecisionPacket and event data.
 pub fn build_plan(
     packet: DecisionPacket,
@@ -236,6 +307,17 @@ pub fn build_plan(
     event: &BoundaryEvent,
     shape_hash: &str,
 ) -> RepairPlan {
+    if packet.authority != Authority::Certificate {
+        return RepairPlan {
+            packet,
+            scenario: RepairScenario::Invalidation {
+                reason: "repair refused: decision packet is not certificate-authority".into(),
+            },
+            statements: vec![],
+            shape_hash: shape_hash.to_string(),
+        };
+    }
+
     let scenario = match packet.decision {
         Decision::Preserve => RepairScenario::Preserve,
         Decision::Invalidate => RepairScenario::Invalidation {
@@ -259,44 +341,42 @@ fn classify_scenario(shape: &QueryShape, event: &BoundaryEvent) -> RepairScenari
 
     if group_key_changed {
         let gcol = shape.group_cols.iter().find(|c| event.changed_cols.contains(*c)).unwrap().clone();
-        let old_key = event.old.as_ref()
-            .and_then(|r| r.get(&gcol))
-            .map(val_to_string)
-            .unwrap_or_default();
-        let new_key = event.new.as_ref()
-            .and_then(|r| r.get(&gcol))
-            .map(val_to_string)
-            .unwrap_or_default();
-        RepairScenario::GroupKeyMovement { group_col: gcol, old_key, new_key }
+        
+        let old_key = required_value(event, RowSide::Old, &gcol).map(val_to_string);
+        let new_key = required_value(event, RowSide::New, &gcol).map(val_to_string);
+
+        if let (Some(old_key), Some(new_key)) = (old_key, new_key) {
+            RepairScenario::GroupKeyMovement { group_col: gcol, old_key, new_key }
+        } else {
+            RepairScenario::Invalidation { reason: format!("missing old or new group key value for {gcol}") }
+        }
     } else if predicate_changed {
         let pcol = shape.predicate_cols.iter().find(|c| event.changed_cols.contains(*c)).unwrap().clone();
-        let old_val = event.old.as_ref()
-            .and_then(|r| r.get(&pcol))
-            .map(val_to_string)
-            .unwrap_or_default();
-        let new_val = event.new.as_ref()
-            .and_then(|r| r.get(&pcol))
-            .map(val_to_string)
-            .unwrap_or_default();
-        RepairScenario::PredicateBoundaryCrossing { pred_col: pcol, old_val, new_val }
+        let old_val = required_value(event, RowSide::Old, &pcol).map(val_to_string);
+        let new_val = required_value(event, RowSide::New, &pcol).map(val_to_string);
+        
+        if let (Some(old_val), Some(new_val)) = (old_val, new_val) {
+            RepairScenario::PredicateBoundaryCrossing { pred_col: pcol, old_val, new_val }
+        } else {
+            RepairScenario::Invalidation { reason: format!("missing old or new predicate value for {pcol}") }
+        }
     } else if aggregate_changed {
         let acol = shape.aggregate_cols.iter().find(|c| event.changed_cols.contains(*c)).unwrap().clone();
         if shape.aggregate_function == AggregateFunction::Count {
             RepairScenario::CountAdjust { direction: 0 } // COUNT unaffected by value change
         } else {
-            let old_val = event.old.as_ref()
-                .and_then(|r| r.get(&acol))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let new_val = event.new.as_ref()
-                .and_then(|r| r.get(&acol))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            RepairScenario::AggregateDelta {
-                aggr_col: acol,
-                old_val,
-                new_val,
-                delta: new_val - old_val,
+            let old_val = required_value(event, RowSide::Old, &acol).and_then(|v| v.as_i64());
+            let new_val = required_value(event, RowSide::New, &acol).and_then(|v| v.as_i64());
+            
+            if let (Some(old_val), Some(new_val)) = (old_val, new_val) {
+                RepairScenario::AggregateDelta {
+                    aggr_col: acol,
+                    old_val,
+                    new_val,
+                    delta: new_val - old_val,
+                }
+            } else {
+                RepairScenario::Invalidation { reason: format!("missing old or new aggregate value for {acol}") }
             }
         }
     } else {
@@ -352,7 +432,7 @@ mod tests {
             evidence_level: EvidenceLevel::E3,
             required_evidence: EvidenceLevel::E2,
             repair_class: RepairClass::SingleTableGroupSum,
-            operator: "aggregate_delta".into(),
+            operator: RepairOperator::AggregateDelta,
             reason: "repairable via SINGLE_TABLE_GROUP_SUM".into(),
             proof_tags: vec!["old_new_values_present".into()],
             fallback: Decision::Invalidate,
@@ -383,10 +463,13 @@ mod tests {
             }
         );
 
-        let sql = SqlServerEmitter.emit(&plan, &shape);
-        assert_eq!(sql.len(), 1);
-        assert!(sql[0].contains("value + (50)"));
-        assert!(sql[0].contains("q_hash_rev"));
+        let sql_stmts = SqlServerEmitter.emit(&plan, &shape);
+        assert_eq!(sql_stmts.len(), 1);
+        let stmt = &sql_stmts[0];
+        assert!(stmt.sql.contains("value + (@delta)"));
+        assert!(stmt.sql.contains("@shape_hash"));
+        assert_eq!(stmt.params.get("shape_hash"), Some(&Value::Text("q_hash_rev".into())));
+        assert_eq!(stmt.params.get("delta"), Some(&Value::Int(50)));
     }
 
     #[test]
@@ -410,17 +493,17 @@ mod tests {
             evidence_level: EvidenceLevel::E0,
             required_evidence: EvidenceLevel::E2,
             repair_class: RepairClass::SingleTableGroupSum,
-            operator: "evidence_insufficient".into(),
+            operator: RepairOperator::EvidenceInsufficient,
             reason: "insufficient evidence".into(),
             proof_tags: vec![],
             fallback: Decision::Invalidate,
         };
 
         let plan = build_plan(packet, &shape, &event, "q_hash_rev");
-        let sql = SqlServerEmitter.emit(&plan, &shape);
-        assert_eq!(sql.len(), 1);
-        assert!(sql[0].contains("DELETE"));
-        assert!(sql[0].contains("q_hash_rev"));
+        let sql_stmts = SqlServerEmitter.emit(&plan, &shape);
+        assert_eq!(sql_stmts.len(), 1);
+        assert!(sql_stmts[0].sql.contains("DELETE"));
+        assert!(sql_stmts[0].sql.contains("@shape_hash"));
     }
 
     #[test]
@@ -437,12 +520,12 @@ mod tests {
         };
 
         let plan = build_plan(repair_packet(), &shape, &event, "q_hash_rev");
-        let sql = PostgresEmitter.emit(&plan, &shape);
-        assert_eq!(sql.len(), 2);
-        assert!(sql[0].contains("Step 1"));
-        assert!(sql[0].contains("old_customer_id"));
-        assert!(sql[1].contains("Step 2"));
-        assert!(sql[1].contains("new_customer_id"));
+        let sql_stmts = PostgresEmitter.emit(&plan, &shape);
+        assert_eq!(sql_stmts.len(), 2);
+        assert!(sql_stmts[0].sql.contains("Step 1"));
+        assert!(sql_stmts[0].sql.contains("old_customer_id"));
+        assert!(sql_stmts[1].sql.contains("Step 2"));
+        assert!(sql_stmts[1].sql.contains("new_customer_id"));
     }
 
     #[test]
@@ -466,14 +549,51 @@ mod tests {
             evidence_level: EvidenceLevel::E0,
             required_evidence: EvidenceLevel::E2,
             repair_class: RepairClass::SingleTableGroupSum,
-            operator: "fingerprint_miss".into(),
+            operator: RepairOperator::FingerprintMiss,
             reason: "no intersection".into(),
             proof_tags: vec![],
             fallback: Decision::Preserve,
         };
 
         let plan = build_plan(packet, &shape, &event, "q_hash_rev");
-        let sql = SqlServerEmitter.emit(&plan, &shape);
-        assert!(sql.is_empty());
+        let sql_stmts = SqlServerEmitter.emit(&plan, &shape);
+        assert!(sql_stmts.is_empty());
+    }
+
+    #[test]
+    fn test_non_certificate_refused() {
+        let shape = test_shape();
+        let event = BoundaryEvent {
+            relation: "orders".into(),
+            op: Operation::Update,
+            changed_cols: BTreeSet::from(["amount".into()]),
+            old: Some(RowImage::new().with_col("amount", Value::Int(100))),
+            new: Some(RowImage::new().with_col("amount", Value::Int(150))),
+            commit_lsn: None,
+            evidence_level: EvidenceLevel::E2,
+        };
+
+        let mut packet = repair_packet();
+        packet.authority = Authority::Diagnostic; // Intentionally lower authority
+
+        let plan = build_plan(packet, &shape, &event, "q_hash_rev");
+        assert!(matches!(plan.scenario, RepairScenario::Invalidation { .. }));
+    }
+
+    #[test]
+    fn test_missing_value_downgrades_to_invalidation() {
+        let shape = test_shape();
+        let event = BoundaryEvent {
+            relation: "orders".into(),
+            op: Operation::Update,
+            changed_cols: BTreeSet::from(["amount".into()]),
+            old: None, // Missing old value!
+            new: Some(RowImage::new().with_col("amount", Value::Int(150))),
+            commit_lsn: None,
+            evidence_level: EvidenceLevel::E2,
+        };
+
+        let plan = build_plan(repair_packet(), &shape, &event, "q_hash_rev");
+        assert!(matches!(plan.scenario, RepairScenario::Invalidation { .. }));
     }
 }

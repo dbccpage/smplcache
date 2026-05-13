@@ -8,4 +8,5 @@ license = "Apache-2.0"
 [dependencies]
 smpl_evidence = { path = "../smpl_evidence" }
 smpl_cert = { path = "../smpl_cert" }
+smpl_contract = { path = "../smpl_contract" }
 serde = { version = "1", features = ["derive"] }

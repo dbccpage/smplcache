@@ -15,6 +15,8 @@
 
 use serde::{Deserialize, Serialize};
 use smpl_cert::Decision;
+use smpl_contract::{CertifiedScalar, NumericMethod, NumericUnit};
+use smpl_evidence::EvidenceLevel;
 
 // ─── Resource Budget ───────────────────────────────────────────
 
@@ -97,8 +99,8 @@ impl Default for ActionReward {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DualDecision {
     pub action: Decision,
-    pub repair_score: f64,
-    pub invalidate_score: f64,
+    pub repair_score: CertifiedScalar,
+    pub invalidate_score: CertifiedScalar,
     pub reason: String,
 }
 
@@ -155,11 +157,26 @@ impl DualController for OnlineMirrorDescent {
         let repair_score = self.repair_score(cost, reward);
         let invalidate_score = 0.0; // baseline
 
+        let repair_cert = CertifiedScalar::certificate(
+            repair_score,
+            NumericUnit::Dimensionless,
+            NumericMethod::DualScore,
+            EvidenceLevel::E2, // assuming sufficient context for controller
+            "repair dual score computation",
+        );
+        let invalidate_cert = CertifiedScalar::certificate(
+            invalidate_score,
+            NumericUnit::Dimensionless,
+            NumericMethod::DualScore,
+            EvidenceLevel::E2,
+            "baseline invalidation score",
+        );
+
         if repair_score > invalidate_score {
             DualDecision {
                 action: Decision::Repair,
-                repair_score,
-                invalidate_score,
+                repair_score: repair_cert,
+                invalidate_score: invalidate_cert,
                 reason: format!(
                     "repair justified: score {:.2} > baseline {:.2}",
                     repair_score, invalidate_score
@@ -168,8 +185,8 @@ impl DualController for OnlineMirrorDescent {
         } else {
             DualDecision {
                 action: Decision::Invalidate,
-                repair_score,
-                invalidate_score,
+                repair_score: repair_cert,
+                invalidate_score: invalidate_cert,
                 reason: format!(
                     "repair too expensive at current prices: score {:.2} <= baseline {:.2}",
                     repair_score, invalidate_score
@@ -228,7 +245,7 @@ mod tests {
 
         let decision = controller.choose_action(&cost, &reward);
         assert_eq!(decision.action, Decision::Repair);
-        assert!(decision.repair_score > 0.0);
+        assert!(decision.repair_score.value > 0.0);
     }
 
     #[test]
@@ -251,7 +268,7 @@ mod tests {
 
         let decision = controller.choose_action(&cost, &reward);
         assert_eq!(decision.action, Decision::Invalidate);
-        assert!(decision.repair_score <= 0.0);
+        assert!(decision.repair_score.value <= 0.0);
     }
 
     #[test]
