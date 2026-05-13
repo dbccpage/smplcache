@@ -8,7 +8,8 @@
 //! Evidence levels:
 //!   E0 = changed column names only
 //!   E1 = changed columns + new values
-//!   E2 = old + new values for required columns
+//!   E2 = non-empty old + new row images.
+//!        Required-column sufficiency is checked later by the certificate layer.
 //!   E3 = full before/after row images + commit metadata
 
 use serde::{Deserialize, Serialize};
@@ -50,7 +51,8 @@ pub enum EvidenceLevel {
     E0 = 0,
     /// Changed columns + new values. No old image.
     E1 = 1,
-    /// Old + new values for changed columns.
+    /// Non-empty old + new row images.
+    /// Required-column sufficiency is checked later by the certificate layer.
     E2 = 2,
     /// Full before/after row images + commit metadata.
     E3 = 3,

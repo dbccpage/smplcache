@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "smpl_contract",
     "smpl_evidence",
     "smpl_cert",
     "smpl_repair",

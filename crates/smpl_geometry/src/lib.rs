@@ -15,7 +15,8 @@
 
 use serde::{Deserialize, Serialize};
 use smpl_cert::QueryShape;
-use smpl_evidence::EvidencePacket;
+use smpl_contract::{CertifiedScalar, NumericMethod, NumericUnit};
+use smpl_evidence::{EvidenceLevel, EvidencePacket};
 use std::collections::{BTreeMap, HashMap};
 
 // ─── Coupling Graph ────────────────────────────────────────────
@@ -41,7 +42,7 @@ pub struct CacheHotspot {
     pub shape_id: String,
     pub invalidation_count: usize,
     pub repair_count: usize,
-    pub hotspot_score: f64,
+    pub hotspot_score: CertifiedScalar,
 }
 
 // ─── Invalidation Graph Report ─────────────────────────────────
@@ -49,9 +50,9 @@ pub struct CacheHotspot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InvalidationGraphReport {
     pub components: Vec<Vec<String>>,
-    pub cycles: usize,
-    pub coupling_score: f64,
-    pub invalidation_skew: f64,
+    pub cycles: CertifiedScalar,
+    pub coupling_score: CertifiedScalar,
+    pub invalidation_skew: CertifiedScalar,
     pub hotspots: Vec<CacheHotspot>,
     pub graph: CouplingGraph,
 }
@@ -80,7 +81,7 @@ pub enum LiftAction {
 pub struct LiftProposal {
     pub action: LiftAction,
     pub witness: Vec<String>,
-    pub expected_reduction_pct: f64,
+    pub expected_reduction_pct: CertifiedScalar,
 }
 
 // ─── Union-Find ────────────────────────────────────────────────
@@ -227,18 +228,39 @@ pub fn analyze_coupling(
         .filter(|(i, _)| inv_counts[*i] > 0)
         .count();
     let e_count = edges.len();
-    let cycles = if e_count >= active_nodes {
+    let cycles_val = if e_count >= active_nodes {
         e_count - active_nodes + num_components
     } else {
         0
     };
+    let cycles = CertifiedScalar::certificate(
+        cycles_val as f64,
+        NumericUnit::Count,
+        NumericMethod::CycleRank,
+        EvidenceLevel::E2,
+        "Euler characteristic cycle count",
+    );
 
     // Coupling score: density relative to complete graph
     let max_edges = if n > 1 { n * (n - 1) / 2 } else { 1 };
-    let coupling_score = (e_count as f64 / max_edges as f64) * 100.0;
+    let coupling_score_val = (e_count as f64 / max_edges as f64) * 100.0;
+    let coupling_score = CertifiedScalar::diagnostic(
+        coupling_score_val,
+        NumericUnit::Ratio,
+        NumericMethod::FloatingEstimate,
+        EvidenceLevel::E2,
+        "Graph density ratio",
+    );
 
     // Invalidation skew (entropy)
-    let invalidation_skew = entropy(&inv_counts);
+    let invalidation_skew_val = entropy(&inv_counts);
+    let invalidation_skew = CertifiedScalar::diagnostic(
+        invalidation_skew_val,
+        NumericUnit::Dimensionless,
+        NumericMethod::EntropyEstimate,
+        EvidenceLevel::E2,
+        "Shannon entropy of invalidations",
+    );
 
     // Hotspots: shapes sorted by invalidation count (descending)
     let total_inv: usize = inv_counts.iter().sum();
@@ -252,15 +274,22 @@ pub fn analyze_coupling(
             } else {
                 0.0
             };
+            let hotspot_score = CertifiedScalar::diagnostic(
+                score,
+                NumericUnit::Ratio,
+                NumericMethod::FloatingEstimate,
+                EvidenceLevel::E2,
+                "Relative invalidation frequency",
+            );
             CacheHotspot {
                 shape_id: s.name.clone(),
                 invalidation_count: inv_counts[i],
                 repair_count: 0, // enriched by caller if needed
-                hotspot_score: score,
+                hotspot_score,
             }
         })
         .collect();
-    hotspots.sort_by(|a, b| b.hotspot_score.partial_cmp(&a.hotspot_score).unwrap());
+    hotspots.sort_by(|a, b| b.hotspot_score.value.partial_cmp(&a.hotspot_score.value).unwrap());
 
     InvalidationGraphReport {
         components,
@@ -315,9 +344,13 @@ pub fn propose_lifts(
                             .collect(),
                     },
                     witness: shape_names.clone(),
-                    expected_reduction_pct: (shape_names.len() as f64 - 1.0)
-                        / shape_names.len() as f64
-                        * 100.0,
+                    expected_reduction_pct: CertifiedScalar::proposal(
+                        (shape_names.len() as f64 - 1.0) / shape_names.len() as f64 * 100.0,
+                        NumericUnit::Ratio,
+                        NumericMethod::FloatingEstimate,
+                        EvidenceLevel::E1,
+                        "Expected invalidation reduction from split",
+                    ),
                 });
             }
         }
@@ -326,7 +359,7 @@ pub fn propose_lifts(
     // Proposal 2: Hotspot shapes with high invalidation score
     // may benefit from projection narrowing.
     for hotspot in &report.hotspots {
-        if hotspot.hotspot_score > 0.3 {
+        if hotspot.hotspot_score.value > 0.3 {
             if let Some(shape) = shapes.iter().find(|s| s.name == hotspot.shape_id) {
                 if !shape.projection_cols.is_empty() {
                     let keys: Vec<String> = shape.predicate_cols.iter().cloned().collect();
@@ -339,7 +372,13 @@ pub fn propose_lifts(
                                 includes,
                             },
                             witness: vec![shape.name.clone()],
-                            expected_reduction_pct: hotspot.hotspot_score * 50.0,
+                            expected_reduction_pct: CertifiedScalar::proposal(
+                                hotspot.hotspot_score.value * 50.0,
+                                NumericUnit::Ratio,
+                                NumericMethod::FloatingEstimate,
+                                EvidenceLevel::E1,
+                                "Expected invalidation reduction from projection",
+                            ),
                         });
                     }
                 }
@@ -430,7 +469,7 @@ mod tests {
         // 3 edges (a-b, a-c, b-c), 3 active nodes, 1 component
         // cycles = E - V + C = 3 - 3 + 1 = 1
         assert_eq!(report.graph.edges.len(), 3);
-        assert_eq!(report.cycles, 1);
+        assert_eq!(report.cycles.value, 1.0);
     }
 
     #[test]
@@ -447,7 +486,7 @@ mod tests {
 
         let report = analyze_coupling(&shapes, &events);
         assert_eq!(report.graph.edges.len(), 0);
-        assert_eq!(report.cycles, 0);
+        assert_eq!(report.cycles.value, 0.0);
         assert!(report.components.len() >= 2);
     }
 
@@ -468,7 +507,7 @@ mod tests {
         let report = analyze_coupling(&shapes, &events);
         assert!(!report.hotspots.is_empty());
         assert_eq!(report.hotspots[0].shape_id, "hot");
-        assert!(report.hotspots[0].hotspot_score > report.hotspots[1].hotspot_score);
+        assert!(report.hotspots[0].hotspot_score.value > report.hotspots[1].hotspot_score.value);
     }
 
     #[test]
