@@ -1,103 +1,76 @@
-# smplcache
+# SmplCache: A Theorem-Backed Cache Diagnostic Engine
 
-**Stop invalidating caches. Start repairing them.**
+SmplCache is an open-source (Apache 2.0) diagnostic substrate that tests the repairability of cached database workloads under streaming CDC (Change Data Capture) updates. 
 
-`smplcache` is a workload-shape advisor for CDC-backed caches.
+Unlike traditional heuristic caches that simply flush everything or rely on error-prone logical replication guessing, SmplCache executes exact mathematical boundary testing. Every cache invalidation or repair decision is certified.
 
-Most caches die from over-invalidation: a table changes, so every cached query over that table gets dropped, even when the changed column could not affect the result.
+## Core Philosophy
 
-`smplcache` analyzes query shapes and CDC-style write events to show:
+SmplCache was built to prove that modern data systems are overcomplicated because they route state changes through machinery that cannot certify repair. 
 
-- which invalidations are false;
-- which cached aggregates can be repaired instead of dropped;
-- which columns are cache hotspots;
-- which queries have implicit conversion, missing-index, non-sargable, or parameter-skew risks;
-- which schema split or projection would reduce cache churn.
+Relational theory normalizes data at rest. SmplCache certifies the repairability of data in motion.
 
-It is not a cache server yet. It is a cache survival kit.
+### The Professional Bar
+1. **No silent under-invalidation.**
+2. **No repair claim without evidence.**
+3. **No unsupported SQL feature quietly accepted.**
 
-## CLI Tools
-
-`smplcache` exposes the following workload-shape tools:
-
-### `report`
-
-Analyze cache invalidation behavior from a workload JSON file.
+## Quickstart
 
 ```bash
-python cli.py report examples/workload.common.json --format markdown
+# Clone the repository
+git clone https://github.com/anomalon/smplcache.git
+cd smplcache
+
+# Run tests
+python -m pytest
+
+# Run the workload advisor on the example schema
+python cli.py report examples/workload.common.json
 ```
 
-Reports false invalidations avoided, shape-level invalidations, repairable aggregate updates, top cache hotspots, and coupled query shapes.
+## How It Works
 
-### `doctor`
+SmplCache decomposes a cached query shape into its essential topological boundary (predicates, aggregates, groups, projections). 
 
-Detect query-shape pathologies.
+When a CDC WriteEvent occurs, SmplCache:
+1. Validates the event intersects the shape boundary.
+2. Certifies if the event contains sufficient old/new row evidence to safely repair the cache (Theorem 7).
+3. Emits a `Decision` (`preserve`, `repair`, `invalidate`, `unsupported`) backed by a machine-readable `Certificate`.
 
-```bash
-python cli.py doctor examples/workload.common.json --format markdown
+### Example Outputs
+
+**Certificate for an Invalidated Cache (Missing Evidence):**
+```json
+{
+  "shape": "inventory_stock_count",
+  "event_id": "evt_6",
+  "relation": "inventory",
+  "decision_kind": "invalidate",
+  "reason_code": "missing_evidence_for_repair",
+  "required_evidence": ["amount", "customer_id", "status"],
+  "available_evidence": ["item_id", "quantity"]
+}
 ```
 
-Finds non-sargable predicates, implicit conversion risks, missing index candidates, parameter skew, and stale stats risks.
-
-### `repair`
-
-Generate a SQL delta repair plan for a specific shape and CDC event.
-
-```bash
-python cli.py repair examples/workload.common.json --shape revenue_by_customer_paid --event 3 --format sqlserver
+**Certificate for a Repaired Cache:**
+```json
+{
+  "shape": "revenue_by_customer_paid",
+  "event_id": "evt_5",
+  "relation": "orders",
+  "decision_kind": "repair",
+  "reason_code": "group_move",
+  "required_evidence": ["amount", "customer_id", "status"],
+  "available_evidence": ["amount", "customer_id", "status"],
+  "repair_program": "paid_sum_by_group_key"
+}
 ```
 
-Outputs the exact SQL (e.g. `MERGE` statement) needed to incrementally repair a cached aggregate instead of dropping it.
+## Documentation
 
-### `compare`
+The mathematical theory behind SmplCache is fully documented in `docs/quotient_repairability.md`. 
+See `docs/` for specific implementations regarding CDC evidence, SQL restriction, and topology maps.
 
-Compare an obstructed workload against a lifted workload.
-
-```bash
-python cli.py compare examples/obstruction_mess.json examples/lifted_clean.json --format markdown
-```
-
-Shows coupling reduction, invalidation cycles reduction, obstruction score before/after, and suggested structural lift.
-
-### `graph`
-
-Analyze the workload's invalidation graph diagnostics.
-
-```bash
-python cli.py graph examples/workload.common.json --format markdown
-```
-
-Outputs the invalidation graph, cache invalidation cycles, invalidation skew, and coupling recommendations.
-
-### `replay`
-
-Run the replay simulator to compare invalidation policies across historical CDC events.
-
-```bash
-python cli.py replay examples/workload.common.json --format markdown
-```
-
-Shows event-by-event comparisons of Table Invalidation vs Shape Invalidation vs Repair policies, illustrating exactly where repairs reduce cache drops.
-
-### `matrix` (experimental)
-
-Analyze the workload as an invalidation correlation matrix.
-
-```bash
-python cli.py matrix examples/obstruction_mess.json examples/lifted_clean.json
-```
-
-Shows dominance score, dominant invalidation component, and the number of shapes controlled by the dominant mode.
-
-## Roadmap
-
-1. Add `evidence_level` support in workload JSON
-2. Add `repair_class` field per shape
-3. Build repairability classifier with strict invalidate fallback
-4. Add repair SQL generator for single-table SUM/COUNT GROUP BY
-5. Add non-sargable predicate detector
-6. Add implicit conversion detector
-7. Add replay simulator: table invalidation vs shape invalidation vs repair
-8. Add join-aware sensitivity model
-9. Add oracle-based fuzz tests for safe repair classes
+## License
+Apache 2.0 License.

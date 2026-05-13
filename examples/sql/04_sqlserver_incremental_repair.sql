@@ -126,7 +126,7 @@ PRINT '--- INITIAL STATE ---';
 SELECT * FROM dbo.cached_aggregates;
 
 -- TEST 1: Orthogonal Write (Update Shipping Address)
--- Net Result: -100 + 100 = 0. Cache handles it seamlessly.
+-- Net Result: -100 + 100 = 0. Cache handles it perfectly.
 PRINT '--- TEST 1: Orthogonal Write (Update Address) ---';
 UPDATE dbo.orders SET shipping_address = '999 Safe Harbor Rd' WHERE id = 1;
 SELECT * FROM dbo.cached_aggregates;

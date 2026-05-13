@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "smplcache Workload Schema v1",
+  "type": "object",
+  "properties": {
+    "version": { "type": "string", "const": "v1" },
+    "schema": {
+      "type": "object",
+      "description": "Database schema definition",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "columns": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "shapes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "relation": { "type": "string" },
+          "predicate_cols": { "type": "array", "items": { "type": "string" } },
+          "aggregate_cols": { "type": "array", "items": { "type": "string" } },
+          "group_cols": { "type": "array", "items": { "type": "string" } },
+          "projection_cols": { "type": "array", "items": { "type": "string" } },
+          "join_cols": { "type": "array", "items": { "type": "string" } },
+          "security_cols": { "type": "array", "items": { "type": "string" } },
+          "sql": { "type": "string", "description": "Original SQL query" },
+          "required_cdc_evidence": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["name", "relation"]
+      }
+    }
+  },
+  "required": ["version", "shapes"]
+}
