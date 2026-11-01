@@ -1,28 +1,48 @@
 # License: Licensed under the Apache License, Version 2.0.
 # Copyright: Copyright 2026 Jeremy Carroll
-import sys
+from decimal import Decimal
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from smplcache import QueryShape, WriteEvent, AggregateCache, process_event
+from smplcache import (
+    AggregateCache,
+    Predicate,
+    QueryShape,
+    WriteEvent,
+    process_event,
+)
+
 
 def main() -> None:
     shape = QueryShape(
         name="revenue_by_customer_paid",
         relation="orders",
-        predicate_cols={"status"},
-        aggregate_cols={"amount"},
-        group_cols={"customer_id"},
+        agg_fn="sum",
+        agg_col="amount",
+        group_cols=("customer_id",),
+        predicate=Predicate((("status", "=", "paid"),)),
     )
 
-    cache = AggregateCache(values={"c1": 100})
+    cache = AggregateCache(values={"c1": Decimal(100)})
 
     events = [
         WriteEvent(
             relation="orders",
             changed_cols={"shipping_address"},
-            old={"customer_id": "c1", "status": "paid", "amount": 100, "shipping_address": "old"},
-            new={"customer_id": "c1", "status": "paid", "amount": 100, "shipping_address": "new"},
+            old={
+                "customer_id": "c1",
+                "status": "paid",
+                "amount": 100,
+                "shipping_address": "old",
+            },
+            new={
+                "customer_id": "c1",
+                "status": "paid",
+                "amount": 100,
+                "shipping_address": "new",
+            },
         ),
         WriteEvent(
             relation="orders",
@@ -46,6 +66,7 @@ def main() -> None:
 
     print("Final aggregate cache:")
     print(cache.values)
+
 
 if __name__ == "__main__":
     main()
