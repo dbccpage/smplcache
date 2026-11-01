@@ -99,7 +99,9 @@ class TestSmplcache(unittest.TestCase):
             group_cols=("customer_id",),
             predicate=Predicate((("status", "=", "paid"),)),
         )
-        cache = AggregateCache(values={"c1": Decimal(100)})
+        cache = AggregateCache.from_rows(
+            shape, [{"customer_id": "c1", "status": "paid", "amount": 100}]
+        )
         event = WriteEvent(
             relation="orders",
             changed_cols={"shipping_address"},
@@ -132,7 +134,9 @@ class TestSmplcache(unittest.TestCase):
             group_cols=("customer_id",),
             predicate=Predicate((("status", "=", "paid"),)),
         )
-        cache = AggregateCache(values={"c1": Decimal(100)})
+        cache = AggregateCache.from_rows(
+            shape, [{"customer_id": "c1", "status": "paid", "amount": 100}]
+        )
         event = WriteEvent(
             relation="orders",
             changed_cols={"amount"},

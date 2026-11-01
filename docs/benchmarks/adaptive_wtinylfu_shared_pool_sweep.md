@@ -1,5 +1,10 @@
 # Adaptive Window Sizing (`wtinylfu` / Count-Min Sketch) & Shared Multi-Query `JoinAuxState` Pool Evaluation
 
+> Historical benchmark: these tables were recorded before the PR #7 review repairs
+> at commit `d8467e7`. Certification now leaves access telemetry unchanged, which
+> changes eviction trajectories. Rerun the documented sweep commands before using
+> these figures for the current revision or a resume claim.
+
 Empirical evaluation of **W-TinyLFU hill-climbing admission/window adaptation** (`wtinylfu`) with
 **Count-Min Sketch (`CountMinSketch`) frequency aging** under rapid multi-phase Zipfian oscillations ($P = 4$ phases)
 and **Shared Multi-Query `JoinAuxState` memory pools (`SharedJoinAuxPool`)** across $M = 3$ concurrent join queries.

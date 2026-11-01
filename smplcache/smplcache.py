@@ -7,7 +7,7 @@ smplcache: Shape-driven, default-deny cache repair and invalidation certifier.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
@@ -49,14 +49,23 @@ class FingerprintSet(frozenset):  # type: ignore[type-arg]
 
 
 def normalize_relation(relation: str) -> str:
-    """Normalize a relation identifier by stripping schema qualifier and lowercasing."""
+    """Normalize an unquoted relation identifier without erasing its namespace."""
     if not relation or not isinstance(relation, str):
         return ""
     cleaned = relation.strip()
     if not cleaned:
         return ""
     parts = [p.strip() for p in cleaned.split(".") if p.strip()]
-    return parts[-1].lower() if parts else ""
+    return ".".join(parts).lower() if parts else ""
+
+
+def _ambiguous_relation(left: str, right: str) -> bool:
+    """An unqualified name cannot identify a qualified table without a binding."""
+    return (
+        left != right
+        and left.rsplit(".", 1)[-1] == right.rsplit(".", 1)[-1]
+        and ("." not in left or "." not in right)
+    )
 
 
 def _is_numeric_non_bool(val: Any) -> bool:
@@ -73,15 +82,29 @@ def _to_decimal(val: Any) -> Decimal:
     if isinstance(val, int):
         return Decimal(val)
     if isinstance(val, float):
-        return Decimal(str(val))
+        return _to_decimal(Decimal(str(val)))
     raise TypeError(f"Expected numeric value, got {type(val).__name__}")
+
+
+def _decimal_add(left: Decimal, right: Decimal) -> Decimal:
+    """Add finite decimal sums without rounding away low-order contributions."""
+    left, right = _to_decimal(left), _to_decimal(right)
+    if not left:
+        return right
+    if not right:
+        return left
+    exponent = min(int(left.as_tuple().exponent), int(right.as_tuple().exponent))
+    precision = max(left.adjusted(), right.adjusted()) - exponent + 2
+    with localcontext() as ctx:
+        ctx.prec = max(ctx.prec, precision)
+        return left + right
 
 
 def _normalize_group_atom(val: Any) -> Any:
     if val is None:
         return NULL_GROUP_KEY
     if isinstance(val, float):
-        d = Decimal(str(val))
+        d = _to_decimal(val)
         if d == d.to_integral_value():
             return int(d)
         return d
@@ -461,6 +484,8 @@ class AggregateCache:
 
         for r in rows:
             lower_row = {str(k).lower(): v for k, v in r.items()}
+            if not shape.required_evidence() <= lower_row.keys():
+                raise ValueError("Incomplete aggregate seed evidence")
             if not shape.predicate.matches(lower_row):
                 continue
             g_key = shape.extract_group_key(lower_row)
@@ -475,7 +500,7 @@ class AggregateCache:
                 if raw_val is not None:
                     n_cur += 1
                     if shape.agg_fn in ("sum", "avg"):
-                        s_cur += _to_decimal(raw_val)
+                        s_cur = _decimal_add(s_cur, _to_decimal(raw_val))
             cache._group_state[g_key] = (s_cur, n_cur, r_cur)
 
         for g_key in list(cache._group_state.keys()):
@@ -599,21 +624,30 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
     # Schema evolution or transaction boundary violations on wildcard/target relation fail closed
     explicit_op = event.explicit_operation.upper() if event.explicit_operation else None
     if event.schema_change or explicit_op in ("SCHEMA_CHANGE", "DDL"):
+        if _ambiguous_relation(shape_rel, event_rel):
+            return Decision.invalidate("ambiguous_relation", cert)
         if event.relation.strip() in ("*", "") or event_rel == shape_rel:
             return Decision.invalidate("schema_evolution", cert)
         return Decision.preserve("unrelated_relation", cert)
 
     if explicit_op == "TX_VIOLATION":
+        if _ambiguous_relation(shape_rel, event_rel):
+            return Decision.invalidate("ambiguous_relation", cert)
         if event.relation.strip() in ("*", "") or event_rel == shape_rel:
             return Decision.invalidate("transaction_boundary_violation", cert)
         return Decision.preserve("unrelated_relation", cert)
 
     # Rule 1: Relation mismatch after normalization -> preserve unrelated_relation
+    if event_rel in ("", "*") or _ambiguous_relation(shape_rel, event_rel):
+        return Decision.invalidate("ambiguous_relation", cert)
     if event_rel != shape_rel:
         return Decision.preserve("unrelated_relation", cert)
 
     if explicit_op == "TRUNCATE":
         return Decision.invalidate("truncate_event", cert)
+
+    if explicit_op and explicit_op not in ("INSERT", "UPDATE", "DELETE"):
+        return Decision.invalidate("unsupported_event_operation", cert)
 
     old_map = {str(k).lower(): v for k, v in (event.old or {}).items()}
     new_map = {str(k).lower(): v for k, v in (event.new or {}).items()}
@@ -636,9 +670,9 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
 
     if explicit_op:
         op = explicit_op
-        if op == "INSERT" and old_map:
+        if op == "INSERT" and (old_map or not new_map):
             return Decision.invalidate("invalid_event_payload", cert)
-        if op == "DELETE" and new_map:
+        if op == "DELETE" and (new_map or not old_map):
             return Decision.invalidate("invalid_event_payload", cert)
         if op == "UPDATE" and (not old_map or not new_map):
             cert.required_evidence = sorted(shape.required_evidence())
@@ -672,7 +706,7 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
             k for k in common_keys if _values_equal(old_map[k], new_map[k])
         )
         sym_diff = frozenset(old_map.keys() ^ new_map.keys())
-        derived_cols = known_diff | sym_diff | unavail_cols
+        derived_cols = known_diff | sym_diff | unavail_cols | caller_cols
         if caller_cols:
             non_unavail_caller = caller_cols - unavail_cols
             if not (known_diff <= non_unavail_caller) or (
@@ -751,6 +785,9 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
             if op in ("UPDATE", "INSERT")
             else (False, Decimal(0), 0)
         )
+        for row in (old_map, new_map):
+            if row:
+                hash(shape.extract_group_key(row))
     except (TypeError, ValueError, InvalidOperation):
         return Decision.invalidate("invalid_evidence_type", cert)
 
@@ -794,6 +831,9 @@ def process_event(
     if decision.kind != DecisionKind.REPAIR:
         return decision
 
+    if not cache._from_rows:
+        return Decision.invalidate("missing_aggregate_state", decision.certificate)
+
     try:
         old_map = {str(k).lower(): v for k, v in (event.old or {}).items()}
         new_map = {str(k).lower(): v for k, v in (event.new or {}).items()}
@@ -828,7 +868,7 @@ def process_event(
                     )
             s_cur, n_cur, r_cur = cache._group_state.get(old_group, (Decimal(0), 0, 0))
             cache._group_state[old_group] = (
-                s_cur - old_sum,
+                _decimal_add(s_cur, old_sum.copy_negate()),
                 n_cur - old_n,
                 r_cur - 1,
             )
@@ -849,7 +889,7 @@ def process_event(
                     )
             s_cur, n_cur, r_cur = cache._group_state.get(new_group, (Decimal(0), 0, 0))
             cache._group_state[new_group] = (
-                s_cur + new_sum,
+                _decimal_add(s_cur, new_sum),
                 n_cur + new_n,
                 r_cur + 1,
             )

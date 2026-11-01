@@ -564,6 +564,7 @@ class WalStreamProcessor:
     toast_placeholder: str = DEBEZIUM_UNAVAILABLE_VALUE
     numeric_cols: frozenset[str] = field(default_factory=frozenset)
     strict_transactions: bool = False
+    is_invalidated: bool = field(default=False, init=False)
     _active_tx_id: str | None = field(default=None, init=False)
     _tx_buffer: list[WalParsedRecord] = field(default_factory=list, init=False)
     _known_table_types: dict[str, dict[str, str]] = field(
@@ -583,6 +584,7 @@ class WalStreamProcessor:
         cache: AggregateCache,
         on_invalidate: InvalidateCallback | None,
     ) -> AggregateCache:
+        self.is_invalidated = True
         if self.aux_state is not None:
             self.aux_state.is_invalidated = True
         if on_invalidate is None:
@@ -590,8 +592,15 @@ class WalStreamProcessor:
         rebuilt = on_invalidate()
         if isinstance(rebuilt, tuple) and len(rebuilt) == 2:
             self.aux_state = rebuilt[1]
-            return rebuilt[0]
-        return rebuilt
+            rebuilt_cache = rebuilt[0]
+        else:
+            rebuilt_cache = rebuilt
+        if isinstance(self.shape, MultiTableJoinShape) and (
+            self.aux_state is None or self.aux_state.is_invalidated
+        ):
+            return rebuilt_cache
+        self.is_invalidated = False
+        return rebuilt_cache
 
     def _certify_only(self, evt: WriteEvent) -> Decision:
         if isinstance(self.shape, MultiTableJoinShape):
@@ -680,8 +689,11 @@ class WalStreamProcessor:
             return dec, cache
 
         assert rec.event is not None
+        if self.is_invalidated:
+            dec = self._make_tx_violation_decision("cache_requires_rebuild", rec.tx_id)
+            return dec, self._invoke_on_invalidate(cache, on_invalidate)
         dec = self._process_only(cache, rec.event)
-        if dec.kind == DecisionKind.INVALIDATE:
+        if dec.kind in (DecisionKind.INVALIDATE, DecisionKind.UNSUPPORTED):
             cache = self._invoke_on_invalidate(cache, on_invalidate)
         return dec, cache
 
@@ -788,24 +800,15 @@ class WalStreamProcessor:
             tx_invalidated = False
             for item in buffered:
                 if tx_invalidated:
-                    if self._check_implicit_schema_evolution(item):
-                        schema_evt = WriteEvent(
-                            relation=item.relation or "*",
-                            event_id=(
-                                item.event.event_id if item.event else "schema_drift"
-                            ),
-                            explicit_operation="SCHEMA_CHANGE",
-                            schema_change=True,
-                        )
-                        d = self._certify_only(schema_evt)
-                    else:
-                        assert item.event is not None
-                        d = self._certify_only(item.event)
+                    self._check_implicit_schema_evolution(item)
+                    d = self._make_tx_violation_decision(
+                        "cache_requires_rebuild", item.tx_id
+                    )
                     decisions.append(d)
                 else:
                     d, cache = self._apply_single_record(item, cache, None)
                     decisions.append(d)
-                    if d.kind == DecisionKind.INVALIDATE:
+                    if d.kind in (DecisionKind.INVALIDATE, DecisionKind.UNSUPPORTED):
                         tx_invalidated = True
 
             if tx_invalidated:

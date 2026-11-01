@@ -155,7 +155,7 @@ def encode_debezium_envelope(
         "before": before,
         "after": after,
         "source": {
-            "schema": "public",
+            "schema": "",
             "table": rel,
             "lsn": lsn,
             "txId": tx_id,
@@ -334,7 +334,7 @@ def generate_zipf_snowflake_debezium_stream(
                 new_c["tier"] = rng.choice(tier_choices)
             tx_tables["customers"][c_idx] = dict(new_c)
             step_events.append(
-                WriteEvent(relation="public.customers", old=old_c, new=dict(new_c))
+                WriteEvent(relation="customers", old=old_c, new=dict(new_c))
             )
             db_mutations.append(("customers", "update", c_idx, dict(new_c)))
 
@@ -353,7 +353,7 @@ def generate_zipf_snowflake_debezium_stream(
                 next_order_id += 1
                 tx_tables["orders"].append(dict(new_o))
                 step_events.append(
-                    WriteEvent(relation="public.orders", old={}, new=dict(new_o))
+                    WriteEvent(relation="orders", old={}, new=dict(new_o))
                 )
                 db_mutations.append(("orders", "insert", None, dict(new_o)))
             else:
@@ -363,7 +363,7 @@ def generate_zipf_snowflake_debezium_stream(
                 new_o["amount"] = old_o["amount"] + Decimal("15.00")
                 tx_tables["orders"][o_idx] = dict(new_o)
                 step_events.append(
-                    WriteEvent(relation="public.orders", old=old_o, new=dict(new_o))
+                    WriteEvent(relation="orders", old=old_o, new=dict(new_o))
                 )
                 db_mutations.append(("orders", "update", o_idx, dict(new_o)))
 
@@ -377,7 +377,7 @@ def generate_zipf_snowflake_debezium_stream(
                 new_r["macro_region"] = rng.choice(macro_choices)
                 tx_tables["regions"][r_idx] = dict(new_r)
                 step_events.append(
-                    WriteEvent(relation="public.regions", old=old_r, new=dict(new_r))
+                    WriteEvent(relation="regions", old=old_r, new=dict(new_r))
                 )
                 db_mutations.append(("regions", "update", r_idx, dict(new_r)))
         else:
@@ -401,7 +401,7 @@ def generate_zipf_snowflake_debezium_stream(
                     next_order_id += 1
                     tx_tables["orders"].append(dict(new_o))
                     step_events.append(
-                        WriteEvent(relation="public.orders", old={}, new=dict(new_o))
+                        WriteEvent(relation="orders", old={}, new=dict(new_o))
                     )
                     db_mutations.append(("orders", "insert", None, dict(new_o)))
                 else:
@@ -415,7 +415,7 @@ def generate_zipf_snowflake_debezium_stream(
                     ]["id"]
                     tx_tables["orders"][o_idx] = dict(new_o)
                     step_events.append(
-                        WriteEvent(relation="public.orders", old=old_o, new=dict(new_o))
+                        WriteEvent(relation="orders", old=old_o, new=dict(new_o))
                     )
                     db_mutations.append(("orders", "update", o_idx, dict(new_o)))
             elif roll == 2:
@@ -426,7 +426,7 @@ def generate_zipf_snowflake_debezium_stream(
                 new_o["notes"] = f"note_touch_{tx_idx}"
                 tx_tables["orders"][o_idx] = dict(new_o)
                 step_events.append(
-                    WriteEvent(relation="public.orders", old=old_o, new=dict(new_o))
+                    WriteEvent(relation="orders", old=old_o, new=dict(new_o))
                 )
                 db_mutations.append(("orders", "update", o_idx, dict(new_o)))
             elif roll == 3:
@@ -442,7 +442,7 @@ def generate_zipf_snowflake_debezium_stream(
                 new_c["region_id"] = new_reg
                 tx_tables["customers"][c_idx] = dict(new_c)
                 step_events.append(
-                    WriteEvent(relation="public.customers", old=old_c, new=dict(new_c))
+                    WriteEvent(relation="customers", old=old_c, new=dict(new_c))
                 )
                 db_mutations.append(("customers", "update", c_idx, dict(new_c)))
             else:
@@ -455,7 +455,7 @@ def generate_zipf_snowflake_debezium_stream(
                 new_r["active"] = 0 if old_r["active"] == 1 else 1
                 tx_tables["regions"][r_idx] = dict(new_r)
                 step_events.append(
-                    WriteEvent(relation="public.regions", old=old_r, new=dict(new_r))
+                    WriteEvent(relation="regions", old=old_r, new=dict(new_r))
                 )
                 db_mutations.append(("regions", "update", r_idx, dict(new_r)))
 
@@ -1224,7 +1224,7 @@ def generate_phase_rotated_zipf_stream(
                 next_order_id += 1
                 tx_tables["orders"].append(dict(new_o))
                 step_events.append(
-                    WriteEvent(relation="public.orders", old={}, new=dict(new_o))
+                    WriteEvent(relation="orders", old={}, new=dict(new_o))
                 )
                 db_mutations.append(("orders", "insert", None, dict(new_o)))
             else:
@@ -1238,7 +1238,7 @@ def generate_phase_rotated_zipf_stream(
                     new_o["amount"] = old_o["amount"] + Decimal("5.00")
                     tx_tables["orders"][o_idx] = dict(new_o)
                     step_events.append(
-                        WriteEvent(relation="public.orders", old=old_o, new=dict(new_o))
+                        WriteEvent(relation="orders", old=old_o, new=dict(new_o))
                     )
                     db_mutations.append(("orders", "update", o_idx, dict(new_o)))
         else:
@@ -1261,7 +1261,7 @@ def generate_phase_rotated_zipf_stream(
                 new_c["tier"] = "gold" if old_c["tier"] != "gold" else "silver"
                 tx_tables["customers"][c_idx] = dict(new_c)
                 step_events.append(
-                    WriteEvent(relation="public.customers", old=old_c, new=dict(new_c))
+                    WriteEvent(relation="customers", old=old_c, new=dict(new_c))
                 )
             else:
                 # Insert new Cohort `phase_idx` orders up to 36 orders in this phase
@@ -1282,7 +1282,7 @@ def generate_phase_rotated_zipf_stream(
                     tx_tables["orders"].append(dict(new_o))
                     phase_order_indices.append(new_idx)
                     step_events.append(
-                        WriteEvent(relation="public.orders", old={}, new=dict(new_o))
+                        WriteEvent(relation="orders", old={}, new=dict(new_o))
                     )
                     db_mutations.append(("orders", "insert", None, dict(new_o)))
 
@@ -1297,7 +1297,7 @@ def generate_phase_rotated_zipf_stream(
                     new_o["amount"] = old_o["amount"] + Decimal("15.00")
                     tx_tables["orders"][target_o_idx] = dict(new_o)
                     step_events.append(
-                        WriteEvent(relation="public.orders", old=old_o, new=dict(new_o))
+                        WriteEvent(relation="orders", old=old_o, new=dict(new_o))
                     )
                     db_mutations.append(("orders", "update", target_o_idx, dict(new_o)))
 

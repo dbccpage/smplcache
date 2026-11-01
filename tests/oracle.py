@@ -79,6 +79,13 @@ _ACTIVE_MULTI_SCHEMA: (
 ) = None
 
 
+def _attach_namespace(con: sqlite3.Connection, relation: str) -> None:
+    if "." in relation:
+        schema = relation.split(".")[0]
+        if schema not in {row[1] for row in con.execute("PRAGMA database_list")}:
+            con.execute(f'ATTACH DATABASE ":memory:" AS "{schema}"')
+
+
 def _get_oracle_conn(
     relation: str, ordered_cols: tuple[str, ...]
 ) -> sqlite3.Connection:
@@ -88,6 +95,7 @@ def _get_oracle_conn(
         _ORACLE_CONN.create_aggregate("SUM", 1, _SqliteDecimalSum)
         _ORACLE_CONN.create_aggregate("AVG", 1, _SqliteDecimalAvg)
 
+    _attach_namespace(_ORACLE_CONN, relation)
     target_schema = (relation, ordered_cols)
     if _ACTIVE_SCHEMA != target_schema:
         if _ACTIVE_SCHEMA is not None:
@@ -219,7 +227,7 @@ def query_oracle(
         con.executemany(insert_sql, param_rows)
 
     raw_exec_sql = sql if sql is not None else shape_to_sql(shape)
-    exec_sql = re.sub(r"\b(?:public|dbo)\.", "", raw_exec_sql, flags=re.IGNORECASE)
+    exec_sql = raw_exec_sql
     fetched = con.execute(exec_sql).fetchall()
 
     if shape.agg_fn is not None:
@@ -388,6 +396,7 @@ def _get_multi_table_oracle_conn(
 
         # Create parent tables first, then child tables by topological FK depth
         for tbl in ordered_tables:
+            _attach_namespace(_MULTI_ORACLE_CONN, tbl)
             _MULTI_ORACLE_CONN.execute(f"DROP TABLE IF EXISTS {tbl}")
             cols = table_cols[tbl]
             pk_set = parent_pk_cols.get(tbl, set())
@@ -495,7 +504,7 @@ def query_multi_table_oracle(
         con.executemany(insert_sql, param_rows)
 
     raw_exec_sql = sql if sql is not None else join_shape_to_sql(shape)
-    exec_sql = re.sub(r"\b(?:public|dbo)\.", "", raw_exec_sql, flags=re.IGNORECASE)
+    exec_sql = raw_exec_sql
     fetched = con.execute(exec_sql).fetchall()
 
     if shape.agg_fn is not None:

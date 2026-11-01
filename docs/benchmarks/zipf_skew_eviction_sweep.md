@@ -1,5 +1,10 @@
 # Zipfian Skew Eviction Policy Sweep (`max_total_rows = 50`)
 
+> Historical benchmark: these tables were recorded before the PR #7 review repairs
+> at commit `d8467e7`. Certification now leaves access telemetry unchanged, which
+> changes eviction trajectories. Rerun the documented sweep commands before using
+> these figures for the current revision or a resume claim.
+
 Empirical evaluation of `FIFO`, `LRU`, and frequency-biased `LFU` eviction strategies
 in `JoinAuxState` across Zipfian foreign-key skew parameters $s \in [0.0, 2.0]$.
 

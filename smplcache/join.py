@@ -21,6 +21,8 @@ from smplcache.smplcache import (
     DecisionKind,
     Predicate,
     WriteEvent,
+    _ambiguous_relation,
+    _decimal_add,
     _normalize_group_atom,
     _to_decimal,
     _values_equal,
@@ -936,6 +938,30 @@ class JoinAuxState:
             max_fk_fanout=max_fk_fanout,
         )
         managed_rels = state.all_relations()
+        # Validate the complete seed before indexing or eviction can hide duplicates.
+        supplied_rels = {normalize_relation(r) for r in tables}
+        if not managed_rels <= supplied_rels:
+            raise ValueError("Seed must explicitly include every participating table")
+        seen: dict[str, set[Any]] = {rel: set() for rel in managed_rels}
+        for raw_rel, rows in tables.items():
+            rel = normalize_relation(raw_rel)
+            if rel not in managed_rels:
+                continue
+            pk_col = state.pk_col_for(rel)
+            required = {pk_col}
+            for seed_shape in state.all_shapes():
+                required.update(seed_shape.table_required_evidence(rel, pk_col))
+            for row in rows:
+                lower = {str(k).lower(): v for k, v in row.items()}
+                if not required <= lower.keys() or lower.get(pk_col) is None:
+                    raise ValueError(f"Incomplete seed evidence for {rel}")
+                pk = _normalize_group_atom(lower[pk_col])
+                try:
+                    if pk in seen[rel]:
+                        raise ValueError(f"Duplicate primary key in seed for {rel}")
+                    seen[rel].add(pk)
+                except TypeError as exc:
+                    raise ValueError(f"Invalid primary key for {rel}") from exc
         if prior_state is not None:
             state._access_clock = prior_state._access_clock
             state._insertion_clock = prior_state._insertion_clock
@@ -1279,8 +1305,10 @@ class JoinAuxState:
                 )
 
             if eff_shape.agg_fn == "count_star":
+                hash(g_key)
                 contributions.append((g_key, Decimal(0), 1))
             elif eff_shape.agg_col is not None:
+                hash(g_key)
                 aq, ac = eff_shape.agg_col
                 raw_v = env.get(aq.lower(), {}).get(ac.lower())
                 if raw_v is None:
@@ -1374,7 +1402,7 @@ def rebuild_join_cache(
         for g_key, s_delta, n_delta in contribs:
             s_cur, n_cur, r_cur = cache._group_state.get(g_key, (Decimal(0), 0, 0))
             cache._group_state[g_key] = (
-                s_cur + s_delta,
+                _decimal_add(s_cur, s_delta),
                 n_cur + n_delta,
                 r_cur + 1,
             )
@@ -1515,21 +1543,32 @@ def certify_join_event(
     explicit_op = event.explicit_operation.upper() if event.explicit_operation else None
 
     if event.schema_change or explicit_op in ("SCHEMA_CHANGE", "DDL"):
+        if any(_ambiguous_relation(rel, event_rel) for rel in participating_rels):
+            return Decision.invalidate("ambiguous_relation", cert)
         if event.relation.strip() in ("*", "") or event_rel in participating_rels:
             return Decision.invalidate("schema_evolution", cert)
         return Decision.preserve("unrelated_relation", cert)
 
     if explicit_op == "TX_VIOLATION":
+        if any(_ambiguous_relation(rel, event_rel) for rel in participating_rels):
+            return Decision.invalidate("ambiguous_relation", cert)
         if event.relation.strip() in ("*", "") or event_rel in participating_rels:
             return Decision.invalidate("transaction_boundary_violation", cert)
         return Decision.preserve("unrelated_relation", cert)
 
     # Rule 1: Relation not in any participating join table -> preserve unrelated_relation
+    if event_rel in ("", "*") or any(
+        _ambiguous_relation(rel, event_rel) for rel in participating_rels
+    ):
+        return Decision.invalidate("ambiguous_relation", cert)
     if event_rel not in participating_rels:
         return Decision.preserve("unrelated_relation", cert)
 
     if explicit_op == "TRUNCATE":
         return Decision.invalidate("truncate_event", cert)
+
+    if explicit_op and explicit_op not in ("INSERT", "UPDATE", "DELETE"):
+        return Decision.invalidate("unsupported_event_operation", cert)
 
     old_map = {str(k).lower(): v for k, v in (event.old or {}).items()}
     new_map = {str(k).lower(): v for k, v in (event.new or {}).items()}
@@ -1553,9 +1592,9 @@ def certify_join_event(
 
     if explicit_op:
         op = explicit_op
-        if op == "INSERT" and old_map:
+        if op == "INSERT" and (old_map or not new_map):
             return Decision.invalidate("invalid_event_payload", cert)
-        if op == "DELETE" and new_map:
+        if op == "DELETE" and (new_map or not old_map):
             return Decision.invalidate("invalid_event_payload", cert)
         if op == "UPDATE" and (not old_map or not new_map):
             cert.required_evidence = sorted(shape.table_required_evidence(event_rel))
@@ -1589,7 +1628,7 @@ def certify_join_event(
             k for k in common_keys if _values_equal(old_map[k], new_map[k])
         )
         sym_diff = frozenset(old_map.keys() ^ new_map.keys())
-        derived_cols = known_diff | sym_diff | unavail_cols
+        derived_cols = known_diff | sym_diff | unavail_cols | caller_cols
         if caller_cols:
             non_unavail_caller = caller_cols - unavail_cols
             if not (known_diff <= non_unavail_caller) or (
@@ -1688,7 +1727,7 @@ def certify_join_event(
 
     try:
         old_contribs, new_contribs, matched_facts = _compute_join_event_deltas(
-            shape, event_rel, op, old_map, new_map, aux_state
+            shape, event_rel, op, old_map, new_map, aux_state, record_access=False
         )
     except _EvictedJoinKeyError:
         return Decision.invalidate("evicted_join_auxiliary_key", cert)
@@ -1703,10 +1742,10 @@ def certify_join_event(
     group_deltas: dict[Any, tuple[Decimal, int, int]] = {}
     for g_key, s_d, n_d in old_contribs:
         cs, cn, cr = group_deltas.get(g_key, (Decimal(0), 0, 0))
-        group_deltas[g_key] = (cs - s_d, cn - n_d, cr - 1)
+        group_deltas[g_key] = (_decimal_add(cs, s_d.copy_negate()), cn - n_d, cr - 1)
     for g_key, s_d, n_d in new_contribs:
         cs, cn, cr = group_deltas.get(g_key, (Decimal(0), 0, 0))
-        group_deltas[g_key] = (cs + s_d, cn + n_d, cr + 1)
+        group_deltas[g_key] = (_decimal_add(cs, s_d), cn + n_d, cr + 1)
 
     has_nonzero_delta = any(
         s_d != Decimal(0) or n_d != 0 or r_d != 0
@@ -1762,7 +1801,7 @@ def _apply_contribs_to_cache(
     for g_key, s_delta, n_delta in old_contribs:
         s_cur, n_cur, r_cur = cache._group_state.get(g_key, (Decimal(0), 0, 0))
         cache._group_state[g_key] = (
-            s_cur - s_delta,
+            _decimal_add(s_cur, s_delta.copy_negate()),
             n_cur - n_delta,
             r_cur - 1,
         )
@@ -1772,7 +1811,7 @@ def _apply_contribs_to_cache(
     for g_key, s_delta, n_delta in new_contribs:
         s_cur, n_cur, r_cur = cache._group_state.get(g_key, (Decimal(0), 0, 0))
         cache._group_state[g_key] = (
-            s_cur + s_delta,
+            _decimal_add(s_cur, s_delta),
             n_cur + n_delta,
             r_cur + 1,
         )
@@ -1806,6 +1845,11 @@ def process_join_event(
 
     if decision.kind == DecisionKind.UNSUPPORTED:
         return decision
+
+    if decision.kind == DecisionKind.REPAIR and not cache._from_rows:
+        if aux_state is not None:
+            aux_state.is_invalidated = True
+        return Decision.invalidate("missing_aggregate_state", decision.certificate)
 
     event_rel = normalize_relation(event.relation)
     if aux_state is None or event_rel not in shape.relations():

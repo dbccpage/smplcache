@@ -25,7 +25,9 @@ def main() -> None:
         predicate=Predicate((("status", "=", "paid"),)),
     )
 
-    cache = AggregateCache(values={"c1": Decimal(100)})
+    cache = AggregateCache.from_rows(
+        shape, [{"customer_id": "c1", "status": "paid", "amount": 100}]
+    )
 
     events = [
         WriteEvent(

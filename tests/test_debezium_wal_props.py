@@ -166,7 +166,12 @@ def wal_stream_scenario_strategy(
     sql, dialect, sec_cols = draw(fragment_query_strategy())
     res = parse_sql(sql, dialect=dialect)
     assert res.is_supported and res.shape is not None
-    shape = replace(res.shape, security_cols=sec_cols)
+    shape = replace(res.shape, relation="public.orders", security_cols=sec_cols)
+    sql = sql.replace("dbo.", "public.")
+    if "public." not in sql.lower():
+        import re
+
+        sql = re.sub(r"(?i)\bFROM\s+orders\b", "FROM public.orders", sql)
 
     initial_rows = draw(table_strategy())
     sim_rows = [dict(r) for r in initial_rows]
@@ -538,7 +543,12 @@ def test_toast_unavailable_on_fingerprint_never_repairs_or_preserves(
     sql, dialect, sec_cols = query_info
     res = parse_sql(sql, dialect=dialect)
     assert res.is_supported and res.shape is not None
-    shape = replace(res.shape, security_cols=sec_cols)
+    shape = replace(res.shape, relation="public.orders", security_cols=sec_cols)
+    sql = sql.replace("dbo.", "public.")
+    if "public." not in sql.lower():
+        import re
+
+        sql = re.sub(r"(?i)\bFROM\s+orders\b", "FROM public.orders", sql)
 
     fp = shape.fingerprint()
     for col in fp:
@@ -576,7 +586,9 @@ def test_disjoint_toast_column_repairs_and_preserves_correctly() -> None:
     )
     assert res.is_supported and res.shape is not None
     shape = res.shape
-    cache = AggregateCache(values={"c1": Decimal("100.00")})
+    cache = AggregateCache.from_rows(
+        shape, [{"customer_id": "c1", "status": "paid", "amount": Decimal("100.00")}]
+    )
 
     # 1. `notes` is TOASTed (unavailable) while `amount` changes -> REPAIR
     payload_repair = {
@@ -635,11 +647,13 @@ def test_disjoint_toast_column_repairs_and_preserves_correctly() -> None:
 
 def test_implicit_schema_evolution_and_strict_transaction_finalize() -> None:
     res = parse_sql(
-        "SELECT customer_id, SUM(amount) FROM orders WHERE status = 'paid' GROUP BY customer_id"
+        "SELECT customer_id, SUM(amount) FROM public.orders WHERE status = 'paid' GROUP BY customer_id"
     )
     assert res.is_supported and res.shape is not None
     shape = res.shape
-    cache = AggregateCache(values={"c1": Decimal(100)})
+    cache = AggregateCache.from_rows(
+        shape, [{"customer_id": "c1", "status": "paid", "amount": 100}]
+    )
     proc = WalStreamProcessor(
         shape=shape,
         numeric_cols=frozenset({"amount"}),

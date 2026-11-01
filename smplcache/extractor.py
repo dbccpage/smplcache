@@ -406,7 +406,7 @@ def parse_sql(
 
     pred = Predicate(terms=tuple(pred_terms))
     shape = QueryShape(
-        relation=raw_table,
+        relation=f"{schema_name}.{raw_table}" if schema_name else raw_table,
         agg_fn=agg_fn,
         agg_col=agg_col,
         group_cols=tuple(group_cols_list),
@@ -418,7 +418,7 @@ def parse_sql(
 
     return ExtractorResult(
         is_supported=True,
-        relation=raw_table,
+        relation=shape.relation,
         predicate_cols=set(pred.columns),
         aggregate_cols={agg_col} if agg_col is not None else set(),
         group_cols=set(group_cols_list),
@@ -645,12 +645,12 @@ def parse_join_sql(
 
         join_clauses.append(
             JoinClause(
-                right_relation=r_rel,
+                right_relation=f"{r_node.db.lower()}.{r_rel}" if r_node.db else r_rel,
                 left_qualifier=resolved_left_qual,
                 left_key=resolved_left_key,
                 right_key=resolved_right_key,
                 join_type=j_type,
-                right_alias=r_alias,
+                right_alias=r_alias or r_rel,
             )
         )
         used_canonical_quals.add(r_canonical_qual)
@@ -798,8 +798,10 @@ def parse_join_sql(
     )
 
     join_shape = MultiTableJoinShape(
-        base_relation=base_rel,
-        base_alias=base_alias,
+        base_relation=(
+            f"{base_node.db.lower()}.{base_rel}" if base_node.db else base_rel
+        ),
+        base_alias=base_alias or base_rel,
         joins=tuple(join_clauses),
         agg_fn=agg_fn,
         agg_col=agg_col,
@@ -809,4 +811,12 @@ def parse_join_sql(
         security_cols=norm_sec,
         name=name,
     )
+    for column in stmt.find_all(exp.Column):
+        if column.catalog:
+            return JoinExtractorResult(False, reason="CatalogQualifier")
+        if column.db:
+            qualifier = qualifier_to_canonical.get(column.table.lower(), "")
+            relation = join_shape.qualifier_to_relation(qualifier)
+            if "." not in relation or column.db.lower() != relation.rsplit(".", 1)[0]:
+                return JoinExtractorResult(False, reason="UnknownSchemaQualifier")
     return JoinExtractorResult(is_supported=True, reason="", shape=join_shape)

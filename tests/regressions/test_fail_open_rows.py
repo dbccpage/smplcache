@@ -58,7 +58,9 @@ def test_row_1_security_group_and_non_status_predicate_changes():
         "SELECT region_id, SUM(amount) FROM orders WHERE status = 'paid' GROUP BY region_id"
     )
     assert res_grp.is_supported and res_grp.shape is not None
-    cache_grp = AggregateCache(values={"us": Decimal(100)})
+    cache_grp = AggregateCache.from_rows(
+        res_grp.shape, [{"region_id": "us", "status": "paid", "amount": 100}]
+    )
     evt_grp = WriteEvent(
         relation="orders",
         changed_cols={"region_id"},
@@ -74,7 +76,9 @@ def test_row_1_security_group_and_non_status_predicate_changes():
         "SELECT item_id, SUM(quantity) FROM inventory WHERE warehouse_id = 'w1' GROUP BY item_id"
     )
     assert res_pred.is_supported and res_pred.shape is not None
-    cache_pred = AggregateCache(values={"item_1": Decimal(50)})
+    cache_pred = AggregateCache.from_rows(
+        res_pred.shape, [{"item_id": "item_1", "warehouse_id": "w1", "quantity": 50}]
+    )
     evt_pred = WriteEvent(
         relation="inventory",
         changed_cols={"warehouse_id"},
@@ -145,7 +149,7 @@ def test_row_3_schema_qualified_case_and_joins():
 
     dec_schema = check_cdc_evidence(
         "SELECT customer_id, SUM(amount) FROM public.orders WHERE status = 'paid' GROUP BY customer_id",
-        evt,
+        WriteEvent(relation="public.orders", old=evt.old, new=evt.new),
     )
     assert dec_schema.kind == DecisionKind.REPAIR
 
@@ -402,7 +406,7 @@ def test_tsql_dialect_and_dbo_normalization() -> None:
         dialect="tsql",
     )
     assert res.is_supported and res.shape is not None
-    assert res.shape.relation == "orders"
+    assert res.shape.relation == "dbo.orders"
     assert res.shape.agg_fn == "sum"
     assert res.shape.agg_col == "amount"
     assert res.shape.group_cols == ("customer_id",)

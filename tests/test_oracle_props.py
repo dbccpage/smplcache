@@ -250,7 +250,7 @@ def scenario_strategy(
             supply_changed = draw(st.booleans())
             changed = set(new_row.keys()) if supply_changed else set()
             evt = WriteEvent(
-                relation="orders",
+                relation=shape.relation,
                 changed_cols=changed,
                 old={},
                 new=dict(new_row),
@@ -267,7 +267,7 @@ def scenario_strategy(
             supply_changed = draw(st.booleans())
             changed = set(old_row.keys()) if supply_changed else set()
             evt = WriteEvent(
-                relation="orders",
+                relation=shape.relation,
                 changed_cols=changed,
                 old=dict(old_row),
                 new={},
@@ -304,7 +304,7 @@ def scenario_strategy(
         if evt_kind == "update_partial_old":
             partial_old = {"id": old_row["id"]}
             evt = WriteEvent(
-                relation="orders",
+                relation=shape.relation,
                 changed_cols=diff_cols or {"amount"},
                 old=partial_old,
                 new=dict(new_row),
@@ -313,7 +313,7 @@ def scenario_strategy(
         else:
             supply_changed = draw(st.booleans())
             evt = WriteEvent(
-                relation="orders",
+                relation=shape.relation,
                 changed_cols=diff_cols if supply_changed else set(),
                 old=dict(old_row),
                 new=dict(new_row),
@@ -407,7 +407,7 @@ def test_evidence_necessity(
         if op_mode == "insert":
             stripped_new = {k: v for k, v in new_row.items() if k != missing_col}
             evt = WriteEvent(
-                relation="orders",
+                relation=shape.relation,
                 changed_cols=set(stripped_new.keys()),
                 old={},
                 new=stripped_new,
@@ -417,7 +417,7 @@ def test_evidence_necessity(
         elif op_mode == "delete":
             stripped_old = {k: v for k, v in old_row.items() if k != missing_col}
             evt = WriteEvent(
-                relation="orders",
+                relation=shape.relation,
                 changed_cols=set(stripped_old.keys()),
                 old=stripped_old,
                 new={},
@@ -438,7 +438,7 @@ def test_evidence_necessity(
                     else dict(new_row)
                 )
                 evt = WriteEvent(
-                    relation="orders",
+                    relation=shape.relation,
                     changed_cols=set(),
                     old=s_old,
                     new=s_new,

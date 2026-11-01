@@ -31,6 +31,9 @@ jobs:
       run: |
         black --check .
 
+    - name: Check package types
+      run: python -m mypy smplcache
+
     - name: Test with pytest
       run: |
         python -m pytest

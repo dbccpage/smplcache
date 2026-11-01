@@ -1,5 +1,10 @@
 # Phase-Rotated Zipfian Access Shift & Windowed Frequency Decay (`w_lfu`) Evaluation
 
+> Historical benchmark: these tables were recorded before the PR #7 review repairs
+> at commit `d8467e7`. Certification now leaves access telemetry unchanged, which
+> changes eviction trajectories. Rerun the documented sweep commands before using
+> these figures for the current revision or a resume claim.
+
 Empirical evaluation of dynamic access pattern shifts (phase-rotated Zipfian distributions)
 across `FIFO`, `LRU`, static `LFU`, and windowed frequency-decay `W-LFU` (`w_lfu`) in `JoinAuxState`
 at fixed memory capacity (`max_total_rows = 50`).

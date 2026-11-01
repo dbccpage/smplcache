@@ -1,6 +1,6 @@
 # SmplCache: Cache Boundary Diagnostic Engine
 
-SmplCache is an open-core diagnostic substrate and database caching engine that tests the repairability of cached database workloads under streaming CDC (Change Data Capture) updates.
+SmplCache is an open-source diagnostic library and incremental cache-maintenance engine that tests the repairability of cached database workloads under streaming CDC (Change Data Capture) updates.
 
 Unlike traditional heuristic caches that flush everything or rely on logical replication guessing, SmplCache executes explicit boundary testing. The model is analyzed on paper for a finite relational fragment; single-relation `SUM`, `COUNT`, `COUNT(*)`, `AVG`, and projection shapes are implemented and checked against a brute-force SQLite oracle.
 
@@ -8,10 +8,10 @@ Unlike traditional heuristic caches that flush everything or rely on logical rep
 
 ## Quick Navigation
 
-- [15-Minute Adoption Quickstart](../docs/quickstart_15_minute_adoption.md)
-- [8-Level Pedagogical Curriculum](../docs/pedagogical_8_level_curriculum.md)
-- [SOTA Systems Review & Commercial Strategy](../docs/sota_caching_review_and_commercial_strategy.md)
-- [Research Forum Dossier](../docs/research_forum/README.md)
+- [15-Minute Adoption Quickstart](docs/quickstart_15_minute_adoption.md)
+- [8-Level Pedagogical Curriculum](docs/pedagogical_8_level_curriculum.md)
+- [SOTA Systems Review & Commercial Strategy](docs/sota_caching_review_and_commercial_strategy.md)
+- [Research Forum Dossier](docs/research_forum/README.md)
 
 ---
 
@@ -52,9 +52,27 @@ python -m smplcache.cli ingest --benchmark --transactions 10 --zipf-s 1.2
 python -m pytest tests/test_smplcache.py
 ```
 
-For the complete walk-through and terminal output logs, refer to the [15-Minute Adoption Guide](../docs/quickstart_15_minute_adoption.md).
+For the complete walk-through and terminal output logs, refer to the [15-Minute Adoption Guide](docs/quickstart_15_minute_adoption.md).
 
 ---
+
+## Integration contract
+
+Use the same explicit relation identity in the SQL, seed tables, and change events.
+`tenant_a.orders` and `tenant_b.orders` are distinct; a qualified name cannot be
+matched to bare `orders` without an upstream binding. The library does not infer a
+SQL search path. Scope each engine instance to one source database.
+
+Seed aggregates with `AggregateCache.from_rows(shape, rows)` and joins with
+`rebuild_join_cache` plus complete `JoinAuxState` tables. A totals-only
+`AggregateCache(values=...)` is readable but cannot authorize repair: totals alone
+omit the row/non-null counts needed for deletion and SQL NULL semantics.
+
+After `invalidate` or `unsupported`, callers of the low-level processing functions
+must discard/rebuild the cached result before serving it or processing further
+changes. `WalStreamProcessor` remembers invalidation until its rebuild callback
+succeeds; join rebuilds must replace both the cache and auxiliary state. Callbacks
+must rebuild at the processed committed boundary, not an arbitrary later snapshot.
 
 ## How It Works
 
@@ -102,25 +120,39 @@ SmplCache organizes developer onboarding into 8 progressive cognitive levels:
 - **Level 0 (The Pattern Break):** Exposing the failure modes of naive cache-aside.
 - **Level 1 (Coordinate Anchoring):** Anchoring queries as geometric coordinate regions in $C^1$.
 - **Level 2 (Refusal Assurance):** Enforcing Theorem 7: fail-closed refusal when CDC evidence is incomplete.
-- **Level 3 (In-Place Delta Repair):** Applying $O(1)$ arithmetic updates ($[h(e)]=0$) directly to output tuples.
+- **Level 3 (In-Place Delta Repair):** Applying incremental aggregate updates with sufficient group state.
 - **Level 4 (Auxiliary Semi-Join Tracking):** Tracking foreign-key fanout in `JoinAuxState`.
 - **Level 5 (Capacity Bounds & Skew Eviction):** Enforcing hard row limits with LFU retention under Zipfian skew.
-- **Level 6 (Multi-Tenant Isolation):** Eliminating cross-tenant cache thrashing via tenant quotient projections $\mathcal{O}_T$.
+- **Level 6 (Multi-Tenant Isolation):** Exploring tenant-aware boundaries; production isolation is not established by these synthetic tests.
 - **Level 7 (Systemic Workload Diagnosis):** Autonomous workload pathology analysis with `smplcache doctor`.
 
-See [8-Level Curriculum](../docs/pedagogical_8_level_curriculum.md) for full details.
+See [8-Level Curriculum](docs/pedagogical_8_level_curriculum.md) for full details.
 
 ---
 
-## Five Commercial Differentiators
+## Implemented capabilities and limits
 
-1. **Zero-Intermediate-State In-Place Delta Repair:** $O(|\text{Result}|)$ memory state, delivering 80%+ RAM reduction vs. streaming IVM engines.
-2. **Refusal Assurance Contract & RFC 8785 Merkle Audit Trail:** Eliminates silent under-invalidation for SOC 2 Type II, HIPAA, and FedRAMP compliance ($50k–$250k ACV).
-3. **Multi-Tenant Observer-Relative Cache Isolation:** Prevents cross-tenant invalidation thrashing and enforces freshness SLAs via tenant quotient projections ($50k–$200k ACV).
-4. **Capacity-Bounded `JoinAuxState` with Frequency-Biased Skew Retention:** Reduces invalidation rates by 40%–70% under Zipfian foreign-key skew ($40k–$150k ACV).
-5. **CI/CD Schema Evolution Advisor & Migration Gate:** Tests pre-flight schema boundary containment in CI/CD pipelines ($25k–$100k ACV).
+1. Shape-driven preserve, repair, invalidate, and unsupported decisions for the admitted SQL fragment.
+2. Incremental `SUM`, `COUNT`, `COUNT(*)`, and `AVG` state, including group and predicate changes.
+3. Foreign-key join maintenance with auxiliary row limits and explicit fallback after evidence eviction.
+4. Synthetic decoded Debezium/wal2json event replay, transaction buffering, and schema-change detection.
+5. Machine-readable decision certificates and SQLite differential/property tests.
 
-See [SOTA Review & Commercial Strategy](../docs/sota_caching_review_and_commercial_strategy.md) for full architecture and licensing specifications.
+The commercial strategy and research-forum documents contain proposals, target
+pricing, and hypotheses. They are not evidence of shipped compliance features,
+measured production RAM savings, or superiority to other products. The adapter
+consumes decoded JSON fixtures; it is not a native PostgreSQL `pgoutput` binary
+protocol client. Live replication, durable offsets, duplicate suppression, and
+production concurrency remain integration work.
+
+`max_total_rows` bounds resident auxiliary rows, not total process memory. Indexes,
+eviction tombstones, frequency history, output groups, and transient work also use
+memory. Decimal sums retain finite input digits; displayed `AVG` division follows
+the active Decimal context and is not an exact rational or a universal database
+rounding guarantee.
+
+See the [PR #7 review](docs/reviews/pr7_review.md) and the proposed
+[SmplCache Live MVP](docs/mvp_smplcache_anomalon.md).
 
 ---
 
@@ -129,7 +161,7 @@ See [SOTA Review & Commercial Strategy](../docs/sota_caching_review_and_commerci
 In accordance with the project Claim Hygiene Rule:
 1. **What It Supports:** Supports boundary-quotient certification, certified in-place arithmetic repair for admitted SPJA single-block aggregates, capacity-bounded join tracking under Zipfian skew, and diagnostic workload pathology analysis.
 2. **What It Does Not Support:** Does not claim support for arbitrary unconstrained SQL (e.g., recursive CTEs, window functions, non-deterministic expressions), does not eliminate physical memory bounds for unbounded cardinality, and confers no operational execution authority (`AuthorityEffect: None`).
-3. **Narrowest Defensible Claim:** Within its declared single-block SPJA equijoin SQL fragment and given complete before-and-after CDC row images, SmplCache identifies repairable state transitions, executes exact in-place delta updates without intermediate operator state, and deterministically falls back to certified invalidation whenever evidence is absent or capacity bounds are exceeded.
+3. **Narrowest Defensible Claim:** Within its declared single-block SPJA equijoin SQL fragment and given complete before-and-after CDC row images, SmplCache identifies repairable state transitions, maintains aggregate sufficient statistics and, for joins, auxiliary row/index state, and deterministically falls back to certified invalidation whenever evidence is absent or capacity bounds are exceeded.
 4. **Next Test Needed:** Live multi-tenant PostgreSQL replication testing under concurrent write workloads and large-scale empirical Zipfian eviction parameter sweeps.
 
 ---
@@ -139,7 +171,7 @@ In accordance with the project Claim Hygiene Rule:
 - Mathematical foundations: `docs/smplcache_theory_quotient_repairability.md`
 - Dependency fingerprinting: `docs/dependency_fingerprinting.md`
 - Invalidation rules: `docs/invalidation_rules.md`
-- Research Forum Dossier: `../docs/research_forum/`
+- Research Forum Dossier: `docs/research_forum/`
 
 ## License
-Apache 2.0 License (Community Edition). Enterprise extensions available under Commercial / BSL 1.1 licensing.
+Apache 2.0 License. See [LICENSE](LICENSE).

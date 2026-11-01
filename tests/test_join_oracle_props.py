@@ -410,7 +410,7 @@ def interleaved_join_stream_strategy(
                 )
                 next_order_id += 1
                 evt = WriteEvent(
-                    relation="public.orders",
+                    relation="orders",
                     old={},
                     new=dict(new_o),
                     event_id=f"j_evt_{s_idx}",
@@ -479,7 +479,7 @@ def interleaved_join_stream_strategy(
                 new_cid = missing_cids[0] if missing_cids else f"c_extra_{s_idx}"
                 new_c = draw(customer_row_strategy(new_cid))
                 evt = WriteEvent(
-                    relation="public.customers",
+                    relation="customers",
                     old={},
                     new=dict(new_c),
                     event_id=f"j_evt_{s_idx}",
@@ -554,6 +554,19 @@ def interleaved_join_stream_strategy(
             wh_list[w_idx] = dict(new_w)
             steps.append(("update", "warehouses", w_idx, dict(new_w), evt, omit_aux))
 
+    if prefix:
+        initial_tables = {prefix + k: v for k, v in initial_tables.items()}
+        steps = [
+            (
+                kind,
+                prefix + table,
+                idx,
+                row,
+                replace(event, relation=prefix + event.relation),
+                omit,
+            )
+            for kind, table, idx, row, event, omit in steps
+        ]
     return shape, sql, initial_tables, steps
 
 
@@ -832,8 +845,8 @@ def test_upgrade3_dimension_fanout_and_fk_reparenting_end_to_end() -> None:
     """
     sql = (
         "SELECT c.region, SUM(o.amount) "
-        "FROM public.orders AS o "
-        "INNER JOIN public.customers AS c ON o.customer_id = c.id "
+        "FROM orders AS o "
+        "INNER JOIN customers AS c ON o.customer_id = c.id "
         "WHERE o.status = 'paid' AND c.tier = 'gold' "
         "GROUP BY c.region"
     )
@@ -887,7 +900,7 @@ def test_upgrade3_dimension_fanout_and_fk_reparenting_end_to_end() -> None:
 
     # Step 1: 1-to-3 dimension fanout update on `c1` (`silver` -> `gold`)
     evt_dim_fanout = WriteEvent(
-        relation="public.customers",
+        relation="customers",
         old={"id": "c1", "tier": "silver", "region": "us", "notes": "n1"},
         new={"id": "c1", "tier": "gold", "region": "us", "notes": "n1"},
     )
@@ -1071,7 +1084,7 @@ def _event_to_wal_payload(
             "before": before,
             "after": after,
             "source": {
-                "schema": "public",
+                "schema": "",
                 "table": rel,
                 "lsn": lsn,
                 "txId": tx_id,
@@ -1102,7 +1115,7 @@ def _event_to_wal_payload(
     if event.old and event.new:
         w2j_msg: dict[str, Any] = {
             "action": "U",
-            "schema": "public",
+            "schema": "",
             "table": rel,
             "lsn": f"0/{lsn}",
             "identity": _enc_w2j_cols(event.old),
@@ -1111,7 +1124,7 @@ def _event_to_wal_payload(
     elif event.new:
         w2j_msg = {
             "action": "I",
-            "schema": "public",
+            "schema": "",
             "table": rel,
             "lsn": f"0/{lsn}",
             "columns": _enc_w2j_cols(event.new),
@@ -1119,7 +1132,7 @@ def _event_to_wal_payload(
     else:
         w2j_msg = {
             "action": "D",
-            "schema": "public",
+            "schema": "",
             "table": rel,
             "lsn": f"0/{lsn}",
             "identity": _enc_w2j_cols(event.old),
@@ -1239,7 +1252,7 @@ def multi_table_wal_tx_scenario_strategy(
                     next_order_id += 1
                     tx_tables["orders"].append(dict(new_row))
                     step_events.append(
-                        WriteEvent(relation="public.orders", old={}, new=dict(new_row))
+                        WriteEvent(relation="orders", old={}, new=dict(new_row))
                     )
                     db_mutations.append(("orders", "insert", None, dict(new_row)))
                 elif op_kind == "fact_delete":
@@ -1248,7 +1261,7 @@ def multi_table_wal_tx_scenario_strategy(
                     )
                     old_row = dict(tx_tables["orders"].pop(idx))
                     step_events.append(
-                        WriteEvent(relation="public.orders", old=old_row, new={})
+                        WriteEvent(relation="orders", old=old_row, new={})
                     )
                     db_mutations.append(("orders", "delete", idx, {}))
                 elif op_kind == "fact_reparent_fk":
@@ -1262,9 +1275,7 @@ def multi_table_wal_tx_scenario_strategy(
                     )
                     tx_tables["orders"][idx] = dict(new_row)
                     step_events.append(
-                        WriteEvent(
-                            relation="public.orders", old=old_row, new=dict(new_row)
-                        )
+                        WriteEvent(relation="orders", old=old_row, new=dict(new_row))
                     )
                     db_mutations.append(("orders", "update", idx, dict(new_row)))
                 elif op_kind == "fact_partial_old":
@@ -1278,7 +1289,7 @@ def multi_table_wal_tx_scenario_strategy(
                     partial_old = {"id": old_row["id"]}
                     step_events.append(
                         WriteEvent(
-                            relation="public.orders",
+                            relation="orders",
                             old=partial_old,
                             new=dict(new_row),
                         )
@@ -1294,9 +1305,7 @@ def multi_table_wal_tx_scenario_strategy(
                     new_row["status"] = draw(STATUS_STRATEGY)
                     tx_tables["orders"][idx] = dict(new_row)
                     step_events.append(
-                        WriteEvent(
-                            relation="public.orders", old=old_row, new=dict(new_row)
-                        )
+                        WriteEvent(relation="orders", old=old_row, new=dict(new_row))
                     )
                     db_mutations.append(("orders", "update", idx, dict(new_row)))
 
@@ -1311,7 +1320,7 @@ def multi_table_wal_tx_scenario_strategy(
                     tx_tables["customers"].append(dict(new_c_row))
                     step_events.append(
                         WriteEvent(
-                            relation="public.customers",
+                            relation="customers",
                             old={},
                             new=dict(new_c_row),
                         )
@@ -1325,7 +1334,7 @@ def multi_table_wal_tx_scenario_strategy(
                     )
                     old_c_row = dict(tx_tables["customers"].pop(idx))
                     step_events.append(
-                        WriteEvent(relation="public.customers", old=old_c_row, new={})
+                        WriteEvent(relation="customers", old=old_c_row, new={})
                     )
                     db_mutations.append(("customers", "delete", idx, {}))
                 else:
@@ -1341,7 +1350,7 @@ def multi_table_wal_tx_scenario_strategy(
                     tx_tables["customers"][idx] = dict(new_c_row)
                     step_events.append(
                         WriteEvent(
-                            relation="public.customers",
+                            relation="customers",
                             old=old_c_row,
                             new=dict(new_c_row),
                         )
@@ -1356,7 +1365,7 @@ def multi_table_wal_tx_scenario_strategy(
                     tx_tables["warehouses"].append(dict(new_w_row))
                     step_events.append(
                         WriteEvent(
-                            relation="public.warehouses",
+                            relation="warehouses",
                             old={},
                             new=dict(new_w_row),
                         )
@@ -1374,7 +1383,7 @@ def multi_table_wal_tx_scenario_strategy(
                     tx_tables["warehouses"][idx] = dict(new_w_row)
                     step_events.append(
                         WriteEvent(
-                            relation="public.warehouses",
+                            relation="warehouses",
                             old=old_w_row,
                             new=dict(new_w_row),
                         )
@@ -1642,7 +1651,7 @@ def test_multi_table_wal_transaction_commit_and_rollback() -> None:
     decs, cache = proc.ingest(
         _event_to_wal_payload(
             WriteEvent(
-                relation="public.customers",
+                relation="customers",
                 old={},
                 new={"id": "c_new", "tier": "gold", "region": "apac", "notes": ""},
             ),
@@ -1656,7 +1665,7 @@ def test_multi_table_wal_transaction_commit_and_rollback() -> None:
     decs, cache = proc.ingest(
         _event_to_wal_payload(
             WriteEvent(
-                relation="public.orders",
+                relation="orders",
                 old={},
                 new={
                     "id": 100,
@@ -1701,7 +1710,7 @@ def test_multi_table_wal_transaction_commit_and_rollback() -> None:
     assert decs == []
     decs, cache = proc.ingest(
         _event_to_wal_payload(
-            WriteEvent(relation="public.customers", old={}, new=c_new_row),
+            WriteEvent(relation="customers", old={}, new=c_new_row),
             wire_format="debezium",
             tx_id="tx_commit",
             lsn=21,
@@ -1711,7 +1720,7 @@ def test_multi_table_wal_transaction_commit_and_rollback() -> None:
     assert decs == []
     decs, cache = proc.ingest(
         _event_to_wal_payload(
-            WriteEvent(relation="public.orders", old={}, new=o_100_row),
+            WriteEvent(relation="orders", old={}, new=o_100_row),
             wire_format="debezium",
             tx_id="tx_commit",
             lsn=22,
@@ -1721,7 +1730,7 @@ def test_multi_table_wal_transaction_commit_and_rollback() -> None:
     assert decs == []
     decs, cache = proc.ingest(
         _event_to_wal_payload(
-            WriteEvent(relation="public.customers", old=c1_old, new=c1_new),
+            WriteEvent(relation="customers", old=c1_old, new=c1_new),
             wire_format="debezium",
             tx_id="tx_commit",
             lsn=23,

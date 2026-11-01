@@ -25,7 +25,9 @@ def main() -> None:
         predicate=Predicate((("warehouse_id", "=", "w1"),)),
     )
 
-    cache = AggregateCache(values={"item_42": Decimal(50)})
+    cache = AggregateCache.from_rows(
+        shape, [{"item_id": "item_42", "warehouse_id": "w1", "quantity": 50}]
+    )
 
     events = [
         WriteEvent(
