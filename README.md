@@ -11,6 +11,8 @@ Unlike traditional heuristic caches that flush everything or rely on logical rep
 - [15-Minute Adoption Quickstart](docs/quickstart_15_minute_adoption.md)
 - [8-Level Pedagogical Curriculum](docs/pedagogical_8_level_curriculum.md)
 - [SOTA Systems Review & Commercial Strategy](docs/sota_caching_review_and_commercial_strategy.md)
+- [SmplCache Live MVP Specification](docs/mvp_smplcache_anomalon.md)
+- [SmplCache Live Architecture & Operations](docs/demo/architecture_and_operations.md)
 - [Research Forum Dossier](docs/research_forum/README.md)
 
 ---
@@ -34,7 +36,7 @@ Get started with SmplCache in under 15 minutes:
 
 ```bash
 # 1. Install package in editable mode
-pip install -e ".[dev]"
+pip install -e ".[dev,demo]"
 
 # 2. Run the workload advisor on the example schema
 python -m smplcache.cli report examples/workload.common.json
@@ -48,8 +50,11 @@ python examples/01_python_orders_revenue_demo.py
 # 5. Run multi-table join benchmark under Zipfian foreign-key skew
 python -m smplcache.cli ingest --benchmark --transactions 10 --zipf-s 1.2
 
-# 6. Run unit tests
-python -m pytest tests/test_smplcache.py
+# 6. Run unit and demo acceptance tests
+python -m pytest
+
+# 7. Launch SmplCache Live interactive web demo locally
+uvicorn demo.api.app:app --host 0.0.0.0 --port 8000
 ```
 
 For the complete walk-through and terminal output logs, refer to the [15-Minute Adoption Guide](docs/quickstart_15_minute_adoption.md).
@@ -137,6 +142,7 @@ See [8-Level Curriculum](docs/pedagogical_8_level_curriculum.md) for full detail
 3. Foreign-key join maintenance with auxiliary row limits and explicit fallback after evidence eviction.
 4. Synthetic decoded Debezium/wal2json event replay, transaction buffering, and schema-change detection.
 5. Machine-readable decision certificates and SQLite differential/property tests.
+6. Interactive **SmplCache Live** web demonstration (`demo/`) with side-by-side table-invalidation baseline comparison, independent native SQLite verification, reproducible decision traces, and Render deployment configuration (`render.yaml` and `Dockerfile`).
 
 The commercial strategy and research-forum documents contain proposals, target
 pricing, and hypotheses. They are not evidence of shipped compliance features,
@@ -151,8 +157,9 @@ memory. Decimal sums retain finite input digits; displayed `AVG` division follow
 the active Decimal context and is not an exact rational or a universal database
 rounding guarantee.
 
-See the [PR #7 review](docs/reviews/pr7_review.md) and the proposed
-[SmplCache Live MVP](docs/mvp_smplcache_anomalon.md).
+See the [PR #7 review](docs/reviews/pr7_review.md), the
+[SmplCache Live MVP specification](docs/mvp_smplcache_anomalon.md), and the
+[SmplCache Live architecture & operations runbook](docs/demo/architecture_and_operations.md).
 
 ---
 

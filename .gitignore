@@ -6,6 +6,10 @@ venv/
 ENV/
 build/
 dist/
+!demo/web/dist/
+!demo/web/dist/**
+node_modules/
+.tsbuild/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

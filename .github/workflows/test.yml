@@ -25,14 +25,14 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[dev,numpy]"
+        pip install -e ".[dev,demo,numpy]"
 
     - name: Check code formatting
       run: |
         black --check .
 
     - name: Check package types
-      run: python -m mypy smplcache
+      run: python -m mypy smplcache demo
 
     - name: Test with pytest
       run: |
