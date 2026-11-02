@@ -7,6 +7,9 @@ Provision, inspect, and smoke-test the SmplCache Live Render service and
 Reads `RENDER_API_KEY` from `~/.env` (or environment) without printing secret
 values. Can also run in `--verify-url <url>` mode without an API key once the
 Render service is live.
+
+Provisioning requires explicit --owner-id and --environment-id. Existing
+services must match the requested owner, environment, repository and branch.
 """
 
 from __future__ import annotations
@@ -116,7 +119,9 @@ def run_https_smoke_checks(base_url: str) -> dict[str, Any]:
     }
 
 
-def provision_or_find_render_service(api_key: str, branch: str) -> dict[str, Any]:
+def provision_or_find_render_service(
+    api_key: str, branch: str, owner_id: str, environment_id: str
+) -> dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
@@ -125,16 +130,9 @@ def provision_or_find_render_service(api_key: str, branch: str) -> dict[str, Any
     with httpx.Client(
         base_url=RENDER_API_BASE, headers=headers, timeout=30.0
     ) as client:
-        r_owners = client.get("/owners", params={"limit": 10})
-        r_owners.raise_for_status()
-        owners = r_owners.json()
-        if not owners:
-            raise RuntimeError(
-                "No Render owners found for the supplied RENDER_API_KEY."
-            )
-        owner_id = owners[0]["owner"]["id"]
-
-        r_svcs = client.get("/services", params={"name": SERVICE_NAME, "limit": 20})
+        r_svcs = client.get(
+            "/services", params={"name": SERVICE_NAME, "ownerId": owner_id, "limit": 20}
+        )
         r_svcs.raise_for_status()
         existing = r_svcs.json()
 
@@ -142,6 +140,15 @@ def provision_or_find_render_service(api_key: str, branch: str) -> dict[str, Any
         for item in existing:
             candidate = item.get("service", item)
             if candidate.get("name") == SERVICE_NAME:
+                if (
+                    candidate.get("ownerId") != owner_id
+                    or candidate.get("environmentId") != environment_id
+                    or candidate.get("repo") != REPO_URL
+                    or candidate.get("branch") != branch
+                ):
+                    raise RuntimeError(
+                        "Existing service does not match the requested owner, environment, repository and branch"
+                    )
                 svc_obj = candidate
                 break
 
@@ -150,9 +157,11 @@ def provision_or_find_render_service(api_key: str, branch: str) -> dict[str, Any
                 "type": "web_service",
                 "name": SERVICE_NAME,
                 "ownerId": owner_id,
+                "environmentId": environment_id,
                 "repo": REPO_URL,
                 "branch": branch,
                 "autoDeploy": "yes",
+                "envVars": [{"key": "PYTHON_VERSION", "value": "3.12.7"}],
                 "serviceDetails": {
                     "runtime": "python",
                     "plan": "free",
@@ -171,23 +180,23 @@ def provision_or_find_render_service(api_key: str, branch: str) -> dict[str, Any
 
         assert svc_obj is not None
         service_id = svc_obj["id"]
-        service_url = (
-            svc_obj.get("serviceDetails", {}).get("url")
-            or f"https://{SERVICE_NAME}.onrender.com"
-        )
+        service_url = svc_obj.get("serviceDetails", {}).get("url")
+        if not service_url:
+            raise RuntimeError("Render did not return a service URL")
         onrender_host = (
             service_url.replace("https://", "").replace("http://", "").strip("/")
         )
 
         # Ensure custom domain smplcache.anomalon.com is attached
         r_domains = client.get(f"/services/{service_id}/custom-domains")
-        if r_domains.status_code == 200:
-            dom_list = [d.get("customDomain", d).get("name") for d in r_domains.json()]
-            if CUSTOM_DOMAIN not in dom_list:
-                client.post(
-                    f"/services/{service_id}/custom-domains",
-                    json={"name": CUSTOM_DOMAIN},
-                )
+        r_domains.raise_for_status()
+        dom_list = [d.get("customDomain", d).get("name") for d in r_domains.json()]
+        if CUSTOM_DOMAIN not in dom_list:
+            result = client.post(
+                f"/services/{service_id}/custom-domains",
+                json={"name": CUSTOM_DOMAIN},
+            )
+            result.raise_for_status()
 
         return {
             "service_id": service_id,
@@ -210,8 +219,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provision",
         action="store_true",
-        help="Create or update the smplcache-live Render service using RENDER_API_KEY.",
+        help="Create or find the smplcache-live Render service using RENDER_API_KEY.",
     )
+    parser.add_argument("--owner-id", help="Explicit Render workspace owner ID")
+    parser.add_argument("--environment-id", help="Explicit Render environment ID")
     parser.add_argument(
         "--verify-url",
         default=None,
@@ -222,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
     import json
 
     if args.provision:
+        if not args.owner_id or not args.environment_id:
+            parser.error("--provision requires --owner-id and --environment-id")
         api_key = _load_env_key("RENDER_API_KEY")
         if not api_key:
             print(
@@ -229,7 +242,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        info = provision_or_find_render_service(api_key, args.branch)
+        info = provision_or_find_render_service(
+            api_key, args.branch, args.owner_id, args.environment_id
+        )
         print(json.dumps({"render_service": info}, indent=2))
         if not args.verify_url:
             args.verify_url = info["service_url"]
