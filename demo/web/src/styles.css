@@ -1,31 +1,33 @@
+/* SmplCache Live: local styles on top of anomalon.css (Anomalon design system v1, palette A).
+   The local variable names are kept and aliased onto the shared tokens. */
 :root {
-  --bg-primary: hsl(222, 47%, 7%);
-  --bg-secondary: hsl(218, 36%, 11%);
-  --bg-card: rgba(18, 26, 43, 0.86);
-  --bg-card-elevated: rgba(26, 37, 60, 0.92);
-  --bg-code: hsl(224, 48%, 5%);
+  --bg-primary: var(--an-bg);
+  --bg-secondary: var(--an-bg);
+  --bg-card: var(--an-surface);
+  --bg-card-elevated: var(--an-surface);
+  --bg-code: var(--an-bg);
 
-  --text-bright: hsl(210, 40%, 98%);
-  --text-secondary: hsl(214, 25%, 82%);
-  --text-muted: hsl(215, 18%, 64%);
+  --text-bright: var(--an-ink);
+  --text-secondary: var(--an-ink-2);
+  --text-muted: var(--an-ink-3);
 
-  --accent-emerald: hsl(158, 72%, 46%);
-  --accent-emerald-bg: rgba(16, 185, 129, 0.14);
-  --accent-cyan: hsl(192, 90%, 50%);
-  --accent-cyan-bg: rgba(6, 182, 212, 0.14);
-  --accent-amber: hsl(38, 92%, 54%);
-  --accent-amber-bg: rgba(245, 158, 11, 0.15);
-  --accent-purple: hsl(265, 83%, 66%);
-  --accent-purple-bg: rgba(139, 92, 246, 0.15);
-  --accent-red: hsl(0, 84%, 60%);
-  --accent-red-bg: rgba(239, 68, 68, 0.16);
+  --accent-emerald: var(--an-ok);
+  --accent-emerald-bg: var(--an-ok-soft);
+  --accent-cyan: var(--an-accent);
+  --accent-cyan-bg: var(--an-accent-soft);
+  --accent-amber: var(--an-warn);
+  --accent-amber-bg: var(--an-warn-soft);
+  --accent-purple: var(--an-ink-2);
+  --accent-purple-bg: var(--an-mute-soft);
+  --accent-red: var(--an-bad);
+  --accent-red-bg: var(--an-bad-soft);
 
-  --border-subtle: rgba(148, 163, 184, 0.16);
-  --border-strong: rgba(148, 163, 184, 0.3);
-  --shadow-card: 0 12px 32px rgba(0, 0, 0, 0.38);
+  --border-subtle: var(--an-line);
+  --border-strong: var(--an-line-strong);
+  --shadow-card: none;
 
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  --font-sans: var(--an-sans);
+  --font-mono: var(--an-mono);
 }
 
 *,
@@ -38,7 +40,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: radial-gradient(circle at 15% 0%, hsl(219, 45%, 13%), var(--bg-primary) 55%);
+  background: var(--bg-primary);
   color: var(--text-bright);
   font-family: var(--font-sans);
   line-height: 1.5;
@@ -71,9 +73,9 @@ a:focus-visible {
 }
 
 .app-shell {
-  max-width: 1360px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 0.85rem 1.25rem 3rem;
+  padding: 1rem max(24px, env(safe-area-inset-right, 0px)) 3rem max(24px, env(safe-area-inset-left, 0px));
 }
 
 /* Header */
@@ -98,7 +100,7 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 1.05rem;
   letter-spacing: -0.02em;
   color: var(--text-bright);
@@ -109,13 +111,12 @@ a:focus-visible {
   height: 10px;
   border-radius: 50%;
   background: var(--accent-emerald);
-  box-shadow: 0 0 10px var(--accent-emerald);
 }
 
 .promise-pill {
   font-size: 0.8125rem;
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--an-mute-soft);
   border: 1px solid var(--border-subtle);
   padding: 0.2rem 0.65rem;
   border-radius: 999px;
@@ -144,9 +145,9 @@ a:focus-visible {
 .hero-banner {
   margin-top: 0.9rem;
   padding: 1.15rem 1.35rem;
-  background: linear-gradient(135deg, rgba(22, 33, 56, 0.92), rgba(14, 21, 38, 0.92));
+  background: var(--bg-card);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: var(--shadow-card);
   display: flex;
   flex-wrap: wrap;
@@ -162,7 +163,7 @@ a:focus-visible {
 .hero-copy h1 {
   margin: 0 0 0.35rem;
   font-size: clamp(1.35rem, 2.4vw, 1.9rem);
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.025em;
   color: var(--text-bright);
 }
@@ -186,7 +187,7 @@ a:focus-visible {
   justify-content: center;
   gap: 0.4rem;
   padding: 0.52rem 0.95rem;
-  border-radius: 8px;
+  border-radius: 6px;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border-strong);
@@ -196,7 +197,7 @@ a:focus-visible {
 }
 
 .btn:hover:not(:disabled) {
-  background: rgba(45, 62, 95, 0.95);
+  background: var(--an-bg);
   border-color: var(--accent-cyan);
 }
 
@@ -206,26 +207,25 @@ a:focus-visible {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, hsl(158, 74%, 38%), hsl(166, 76%, 32%));
-  border-color: hsl(158, 72%, 52%);
-  color: #ffffff;
-  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.28);
+  background: var(--an-accent);
+  border-color: var(--an-accent);
+  color: var(--an-accent-ink);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, hsl(158, 74%, 43%), hsl(166, 76%, 37%));
-  border-color: #ffffff;
+  background: var(--an-accent-hover);
+  border-color: var(--an-accent-hover);
 }
 
 .btn-warning {
   background: var(--accent-amber-bg);
   border-color: var(--accent-amber);
-  color: hsl(42, 96%, 72%);
+  color: var(--an-warn);
 }
 
 .btn-warning:hover:not(:disabled) {
-  background: rgba(245, 158, 11, 0.25);
-  border-color: hsl(42, 96%, 72%);
+  background: var(--an-warn-soft);
+  border-color: var(--an-warn);
 }
 
 .btn-sm {
@@ -244,7 +244,7 @@ a:focus-visible {
 .strip-card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 0.65rem 0.85rem;
   display: flex;
   flex-direction: column;
@@ -252,18 +252,21 @@ a:focus-visible {
 }
 
 .strip-card.status-verified {
-  border-color: rgba(16, 185, 129, 0.45);
-  background: linear-gradient(90deg, rgba(16, 185, 129, 0.12), var(--bg-card));
+  border-color: var(--border-subtle);
+  border-left: 3px solid var(--an-ok);
+  background: var(--an-ok-soft);
 }
 
 .strip-card.status-withheld {
-  border-color: rgba(245, 158, 11, 0.55);
-  background: linear-gradient(90deg, rgba(245, 158, 11, 0.14), var(--bg-card));
+  border-color: var(--border-subtle);
+  border-left: 3px solid var(--an-warn);
+  background: var(--an-warn-soft);
 }
 
 .strip-card.status-mismatch {
-  border-color: var(--accent-red);
-  background: linear-gradient(90deg, var(--accent-red-bg), var(--bg-card));
+  border-color: var(--border-subtle);
+  border-left: 3px solid var(--an-bad);
+  background: var(--an-bad-soft);
 }
 
 .strip-label {
@@ -276,7 +279,7 @@ a:focus-visible {
 
 .strip-value {
   font-size: 1.02rem;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-bright);
   display: flex;
   align-items: center;
@@ -295,7 +298,7 @@ a:focus-visible {
   padding: 0.75rem 1rem;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 6px;
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
@@ -317,9 +320,9 @@ a:focus-visible {
 
 .scenario-tab {
   padding: 0.42rem 0.85rem;
-  border-radius: 7px;
+  border-radius: 6px;
   border: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--an-surface);
   color: var(--text-secondary);
   cursor: pointer;
   font-weight: 600;
@@ -327,9 +330,9 @@ a:focus-visible {
 }
 
 .scenario-tab.active {
-  background: rgba(6, 182, 212, 0.16);
-  border-color: var(--accent-cyan);
-  color: var(--text-bright);
+  background: var(--an-accent-soft);
+  border-color: var(--an-accent);
+  color: var(--an-ink);
 }
 
 .playback-group {
@@ -376,7 +379,7 @@ a:focus-visible {
   border-radius: 6px;
   font-size: 0.76rem;
   border: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--an-surface);
   color: var(--text-secondary);
   cursor: pointer;
   display: inline-flex;
@@ -390,8 +393,8 @@ a:focus-visible {
 }
 
 .step-pill.active {
-  background: rgba(16, 185, 129, 0.16);
-  border-color: var(--accent-emerald);
+  background: var(--an-accent-soft);
+  border-color: var(--an-accent);
   color: var(--text-bright);
   font-weight: 600;
 }
@@ -408,7 +411,7 @@ a:focus-visible {
 .panel-card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: 6px;
   padding: 1rem 1.15rem;
   box-shadow: var(--shadow-card);
 }
@@ -425,7 +428,7 @@ a:focus-visible {
 .panel-title {
   margin: 0;
   font-size: 0.98rem;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-bright);
 }
 
@@ -437,52 +440,52 @@ a:focus-visible {
   padding: 0.26rem 0.72rem;
   border-radius: 999px;
   font-size: 0.8rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 .badge-preserve {
   background: var(--accent-cyan-bg);
   border: 1px solid var(--accent-cyan);
-  color: hsl(190, 95%, 74%);
+  color: var(--an-accent);
 }
 
 .badge-repair {
   background: var(--accent-emerald-bg);
   border: 1px solid var(--accent-emerald);
-  color: hsl(156, 85%, 72%);
+  color: var(--an-ok);
 }
 
 .badge-invalidate {
   background: var(--accent-amber-bg);
   border: 1px solid var(--accent-amber);
-  color: hsl(42, 95%, 74%);
+  color: var(--an-warn);
 }
 
 .badge-unsupported {
   background: var(--accent-purple-bg);
   border: 1px solid var(--accent-purple);
-  color: hsl(265, 90%, 80%);
+  color: var(--an-ink-2);
 }
 
 .badge-mismatch {
   background: var(--accent-red-bg);
   border: 1px solid var(--accent-red);
-  color: hsl(0, 95%, 78%);
+  color: var(--an-bad);
 }
 
 /* Current Event Card */
 .event-banner {
-  background: rgba(12, 18, 32, 0.75);
+  background: var(--an-bg);
   border: 1px solid var(--border-subtle);
-  border-radius: 9px;
+  border-radius: 6px;
   padding: 0.85rem 1rem;
   margin-bottom: 0.9rem;
 }
 
 .event-step-title {
   font-size: 1.05rem;
-  font-weight: 700;
+  font-weight: 600;
   margin: 0 0 0.35rem;
   color: var(--text-bright);
 }
@@ -493,17 +496,17 @@ a:focus-visible {
   margin: 0.35rem 0 0.55rem;
   padding: 0.55rem 0.75rem;
   border-left: 3px solid var(--accent-cyan);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--an-surface);
   border-radius: 0 6px 6px 0;
 }
 
 .withheld-notice {
   margin-top: 0.55rem;
   padding: 0.55rem 0.75rem;
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--accent-amber-bg);
   border: 1px solid var(--accent-amber);
-  color: hsl(42, 95%, 80%);
+  color: var(--an-warn);
   font-size: 0.82rem;
 }
 
@@ -517,7 +520,7 @@ a:focus-visible {
 .diff-box {
   background: var(--bg-code);
   border: 1px solid var(--border-subtle);
-  border-radius: 7px;
+  border-radius: 6px;
   padding: 0.55rem 0.7rem;
   font-family: var(--font-mono);
   font-size: 0.76rem;
@@ -527,7 +530,7 @@ a:focus-visible {
 .diff-box-title {
   font-family: var(--font-sans);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 0.3rem;
@@ -541,18 +544,18 @@ a:focus-visible {
 }
 
 .policy-box {
-  background: rgba(14, 21, 36, 0.82);
+  background: var(--an-surface);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 0.85rem 0.95rem;
 }
 
 .policy-box.smplcache-box {
-  border-color: rgba(16, 185, 129, 0.45);
+  border-color: var(--an-ok);
 }
 
 .policy-box.smplcache-box.withheld-mode {
-  border-color: rgba(245, 158, 11, 0.6);
+  border-color: var(--an-warn);
 }
 
 .policy-header {
@@ -565,7 +568,7 @@ a:focus-visible {
 
 .policy-name {
   font-size: 0.88rem;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-bright);
 }
 
@@ -576,7 +579,7 @@ a:focus-visible {
 
 .total-money {
   font-size: 1.55rem;
-  font-weight: 800;
+  font-weight: 600;
   font-family: var(--font-mono);
   letter-spacing: -0.03em;
   color: var(--text-bright);
@@ -592,8 +595,8 @@ a:focus-visible {
   font-weight: 600;
   padding: 0.12rem 0.48rem;
   border-radius: 5px;
-  background: rgba(16, 185, 129, 0.15);
-  color: hsl(156, 85%, 72%);
+  background: var(--an-ok-soft);
+  color: var(--an-ok);
 }
 
 .group-rows {
@@ -627,19 +630,19 @@ a:focus-visible {
 
 .bar-track {
   height: 6px;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--an-mute-soft);
   border-radius: 999px;
   overflow: hidden;
 }
 
 .bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-emerald), var(--accent-cyan));
+  background: var(--an-accent);
   border-radius: 999px;
 }
 
 .bar-fill.baseline-fill {
-  background: linear-gradient(90deg, hsl(215, 28%, 50%), hsl(215, 35%, 65%));
+  background: var(--an-ink-3);
 }
 
 /* Counters & Sample Table */
@@ -651,9 +654,9 @@ a:focus-visible {
 }
 
 .metric-tile {
-  background: rgba(11, 17, 30, 0.75);
+  background: var(--an-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0.55rem 0.7rem;
 }
 
@@ -664,7 +667,7 @@ a:focus-visible {
 
 .metric-tile-val {
   font-size: 1.1rem;
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-mono);
   color: var(--text-bright);
   margin-top: 0.1rem;
@@ -700,7 +703,7 @@ a:focus-visible {
 }
 
 .orders-table tr.highlighted-row {
-  background: rgba(6, 182, 212, 0.14);
+  background: var(--an-accent-soft);
 }
 
 .status-pill {
@@ -712,17 +715,17 @@ a:focus-visible {
 }
 
 .status-paid {
-  background: rgba(16, 185, 129, 0.16);
-  color: hsl(156, 85%, 72%);
+  background: var(--an-ok-soft);
+  color: var(--an-ok);
 }
 
 .status-pending {
-  background: rgba(245, 158, 11, 0.16);
-  color: hsl(42, 95%, 74%);
+  background: var(--an-warn-soft);
+  color: var(--an-warn);
 }
 
 .status-refunded {
-  background: rgba(148, 163, 184, 0.16);
+  background: var(--an-mute-soft);
   color: var(--text-muted);
 }
 
@@ -747,7 +750,7 @@ a:focus-visible {
 .code-block {
   background: var(--bg-code);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0.75rem;
   font-family: var(--font-mono);
   font-size: 0.76rem;
@@ -766,9 +769,9 @@ a:focus-visible {
 }
 
 .rejected-card {
-  background: rgba(12, 18, 32, 0.8);
+  background: var(--an-bg);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0.7rem 0.85rem;
 }
 
@@ -807,7 +810,7 @@ a:focus-visible {
 
 @media (max-width: 640px) {
   .app-shell {
-    padding: 0.65rem 0.75rem 2.2rem;
+    padding: 0.75rem max(16px, env(safe-area-inset-right, 0px)) 2.2rem max(16px, env(safe-area-inset-left, 0px));
   }
   .evidence-strip,
   .comparison-grid,
@@ -821,4 +824,10 @@ a:focus-visible {
   .total-money {
     font-size: 1.3rem;
   }
+}
+
+/* Shared header: this page has two links, so they stay inline on phones (no menu button). */
+@media (max-width: 760px) {
+  .an-nav.an-nav--inline { display: flex; position: static; flex-direction: row; gap: 16px; padding: 0; border: 0; background: transparent; }
+  .an-nav.an-nav--inline a { padding: 0; }
 }

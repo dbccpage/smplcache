@@ -26,7 +26,10 @@ let mainJs = fs.readFileSync(mainJsPath, "utf-8");
 mainJs = mainJs.replace(/^import\s+["']\.\/styles\.css["'];?\s*$/gm, "");
 
 const cssPath = path.join(__dirname, "src", "styles.css");
-const cssContent = fs.readFileSync(cssPath, "utf-8");
+// The shared Anomalon design system (tokens, header, footer, chips) ships first, then local styles.
+const sharedCssPath = path.join(__dirname, "src", "anomalon.css");
+const cssContent =
+  fs.readFileSync(sharedCssPath, "utf-8") + "\n" + fs.readFileSync(cssPath, "utf-8");
 
 const jsHash = crypto.createHash("sha256").update(mainJs).digest("hex").slice(0, 10);
 const cssHash = crypto.createHash("sha256").update(cssContent).digest("hex").slice(0, 10);
