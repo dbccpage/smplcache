@@ -109,7 +109,7 @@ and **Shared Multi-Query `JoinAuxState` memory pools (`SharedJoinAuxPool`)** acr
 1. **What this artifact supports:**
    - Demonstrates in this synthetic 4-phase rapid oscillation benchmark (`max_total_rows = 50`, 96 transactions across 4 rotating Zipfian cohorts) that `wtinylfu` (combining a 4-row `CountMinSketch`, an adaptive recency window protecting newly admitted phase rows from immediate eviction, and hill-climbing window adaptation) reduces post-shift `evicted_join_auxiliary_key` invalidations relative to `fifo`, `lru`, static `lfu`, and fixed-window `w_lfu` (`lfu_decay_window = 64`).
    - Supports the observation that consolidating $M = 3$ concurrent join queries (`q_region_rev`, `q_tier_cnt`, `q_region_avg`) into a unified `SharedJoinAuxPool` eliminates triplicate storage of shared `regions`, `customers`, and `orders` rows and weights dimension retention by cross-query structural multiplicity, substantially reducing total eviction invalidations compared to partitioning the same row budget across 3 isolated `JoinAuxState` instances.
-   - Checked by the differential oracle (`rebuild_join_cache` parity) with 100% agreement across all tested policies, pool budgets, and phases.
+   - Checked against `rebuild_join_cache` with 100% agreement across the recorded cases. That rebuild shares engine code and is not an independent oracle.
 
 2. **What this artifact does not support:**
    - Does not support a claim that `wtinylfu` eliminates eviction invalidations when the concurrent single-phase working set exceeds `max_total_rows`.
@@ -117,7 +117,7 @@ and **Shared Multi-Query `JoinAuxState` memory pools (`SharedJoinAuxPool`)** acr
    - Does not model queries over completely disjoint table sets where `SharedJoinAuxPool` cannot deduplicate shared dimension or fact rows.
 
 3. **Narrowest defensible claim:**
-   - Under the declared 4-phase oscillating snowflake workload (`seed = 42`) and 3-query shared-schema workload, `wtinylfu` with `CountMinSketch` aging and recency-window protection reduces post-shift eviction invalidations relative to static `lfu` and fixed-window `w_lfu` (`window = 64`), and `SharedJoinAuxPool` reduces multi-query eviction invalidations relative to isolated per-query `JoinAuxState` pools at fixed total row capacity while maintaining 100% oracle agreement.
+   - Under the declared 4-phase oscillating snowflake workload (`seed = 42`) and 3-query shared-schema workload, `wtinylfu` with `CountMinSketch` aging and recency-window protection reduces post-shift eviction invalidations relative to static `lfu` and fixed-window `w_lfu` (`window = 64`), and `SharedJoinAuxPool` reduces multi-query eviction invalidations relative to isolated per-query `JoinAuxState` pools at fixed total row capacity while matching the shared-code rebuild on recorded cases.
 
 4. **Next test needed:**
    - Measure byte-accurate row memory accounting (accounting for variable-width string/JSON payloads rather than uniform row counts) and evaluate multi-tenant workload isolation when one query experiences an adversarial scan burst over unshared tables.

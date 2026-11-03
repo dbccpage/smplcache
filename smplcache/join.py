@@ -24,6 +24,8 @@ from smplcache.smplcache import (
     _ambiguous_relation,
     _decimal_add,
     _normalize_group_atom,
+    _checked_group_atom,
+    _aggregate_decimal,
     _to_decimal,
     _values_equal,
     normalize_relation,
@@ -953,12 +955,22 @@ class JoinAuxState:
                 continue
             pk_col = state.pk_col_for(rel)
             required = {pk_col}
+            join_key_cols = {pk_col}
             for seed_shape in state.all_shapes():
                 required.update(seed_shape.table_required_evidence(rel, pk_col))
+                for join in seed_shape.joins:
+                    if seed_shape.qualifier_to_relation(join.left_qualifier) == rel:
+                        join_key_cols.add(join.left_key.lower())
+                    if normalize_relation(join.right_relation) == rel:
+                        join_key_cols.add(join.right_key.lower())
             for row in rows:
                 lower = {str(k).lower(): v for k, v in row.items()}
                 if not required <= lower.keys() or lower.get(pk_col) is None:
                     raise ValueError(f"Incomplete seed evidence for {rel}")
+                if any(
+                    isinstance(lower.get(col), (bool, float)) for col in join_key_cols
+                ):
+                    raise ValueError("Boolean and float join keys are unsupported")
                 pk = _normalize_group_atom(lower[pk_col])
                 try:
                     if pk in seen[rel]:
@@ -1301,10 +1313,10 @@ class JoinAuxState:
                 g_key: Any = ()
             elif len(eff_shape.group_cols) == 1:
                 q0, c0 = eff_shape.group_cols[0]
-                g_key = _normalize_group_atom(env.get(q0.lower(), {}).get(c0.lower()))
+                g_key = _checked_group_atom(env.get(q0.lower(), {}).get(c0.lower()))
             else:
                 g_key = tuple(
-                    _normalize_group_atom(env.get(q.lower(), {}).get(c.lower()))
+                    _checked_group_atom(env.get(q.lower(), {}).get(c.lower()))
                     for q, c in eff_shape.group_cols
                 )
 
@@ -1320,7 +1332,7 @@ class JoinAuxState:
                 elif eff_shape.agg_fn == "count":
                     contributions.append((g_key, Decimal(0), 1))
                 elif eff_shape.agg_fn in ("sum", "avg"):
-                    contributions.append((g_key, _to_decimal(raw_v), 1))
+                    contributions.append((g_key, _aggregate_decimal(raw_v), 1))
                 else:
                     raise ValueError(
                         f"Unsupported aggregate function: {eff_shape.agg_fn}"
@@ -1586,6 +1598,42 @@ def certify_join_event(
 
     tbl_sec_cols = shape.table_security_cols(event_rel)
     tbl_fp = shape.table_fingerprint(event_rel)
+
+    group_cols = {
+        col.lower()
+        for qualifier, col in shape.group_cols
+        if shape.qualifier_to_relation(qualifier) == event_rel
+    }
+    predicate_cols = {
+        col.lower()
+        for qualifier, col, _, _ in shape.predicate_terms
+        if shape.qualifier_to_relation(qualifier) == event_rel
+    }
+    join_key_cols = {aux_state.pk_col_for(event_rel) if aux_state else "id"}
+    for join in shape.joins:
+        if shape.qualifier_to_relation(join.left_qualifier) == event_rel:
+            join_key_cols.add(join.left_key.lower())
+        if normalize_relation(join.right_relation) == event_rel:
+            join_key_cols.add(join.right_key.lower())
+    agg_col = None
+    if shape.agg_fn in ("sum", "avg") and shape.agg_col is not None:
+        qualifier, col = shape.agg_col
+        if shape.qualifier_to_relation(qualifier) == event_rel:
+            agg_col = col.lower()
+    for row in (old_map, new_map):
+        if any(isinstance(row.get(col), (bool, float)) for col in group_cols):
+            return Decision.invalidate("invalid_evidence_type", cert)
+        if agg_col is not None and isinstance(row.get(agg_col), float):
+            return Decision.invalidate("invalid_evidence_type", cert)
+        if any(isinstance(row.get(col), float) for col in predicate_cols):
+            return Decision.invalidate("invalid_evidence_type", cert)
+        if any(isinstance(row.get(col), (bool, float)) for col in join_key_cols):
+            return Decision.invalidate("invalid_evidence_type", cert)
+        try:
+            for col in join_key_cols & row.keys():
+                hash(_normalize_group_atom(row[col]))
+        except (TypeError, ValueError, InvalidOperation, OverflowError):
+            return Decision.invalidate("invalid_evidence_type", cert)
 
     if unavail_cols & tbl_sec_cols:
         return Decision.invalidate("security_column_changed", cert)

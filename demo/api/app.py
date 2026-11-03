@@ -8,6 +8,8 @@ and serving the compiled frontend bundle.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import os
 from pathlib import Path
 import threading
 import time
@@ -95,7 +97,11 @@ class _ProcessRateLimiter:
             return True
 
 
-def create_app(web_dist_dir: Path | None = None) -> FastAPI:
+def create_app(
+    web_dist_dir: Path | None = None, *, trust_render_edge: bool | None = None
+) -> FastAPI:
+    if trust_render_edge is None:
+        trust_render_edge = os.environ.get("RENDER") == "true"
     application = FastAPI(
         title="SmplCache Live API",
         description=(
@@ -178,6 +184,14 @@ def create_app(web_dist_dir: Path | None = None) -> FastAPI:
     @application.post("/api/runs")
     async def api_runs(payload: RunRequestPayload, request: Request) -> dict[str, Any]:
         client_host = request.client.host if request.client else "local"
+        if trust_render_edge:
+            # Render's public Cloudflare edge replaces this header. Never use
+            # X-Forwarded-For: it can contain caller-supplied addresses.
+            candidate = request.headers.get("cf-connecting-ip", "")
+            try:
+                client_host = str(ipaddress.ip_address(candidate))
+            except ValueError:
+                client_host = "render-unknown-client"
         if not rate_limiter.allow(client_host):
             raise HTTPException(
                 status_code=429,

@@ -84,7 +84,7 @@ at fixed memory capacity (`max_total_rows = 50`).
 1. **What this artifact supports:**
    - Demonstrates in this synthetic 3-table snowflake benchmark (`max_total_rows = 50`, 80 transactions across 2 rotated Zipfian phases) that static `LFU` experiences cache pollution after an access pattern shift: Cohort 1 fact rows (`stale_p1_retained = 28`) retain inflated historical frequency scores (`freq >= 4`) and displace newly inserted Cohort 2 fact rows (`freq = 1`), causing repeated `evicted_join_auxiliary_key` invalidations in Phase 2.
    - Supports the observation that windowed frequency decay (`w_lfu`, halving accumulated access frequencies every `lfu_decay_window = 32` logical accesses while preserving structural resident join multiplicity) ages out stale Cohort 1 fact rows and reduces post-shift eviction invalidations relative to static `LFU`, `LRU`, and `FIFO` in this test configuration.
-   - Checked by the differential oracle (`rebuild_join_cache` parity) with 100% agreement across all tested policies, skew values, and decay windows.
+   - Checked against `rebuild_join_cache` with 100% agreement across the recorded cases. That rebuild shares engine code and is not an independent oracle.
 
 2. **What this artifact does not support:**
    - Does not support a claim that a fixed `lfu_decay_window = 32` is optimal for all workload durations, table cardinalities, or oscillation frequencies.

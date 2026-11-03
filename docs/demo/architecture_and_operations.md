@@ -115,8 +115,9 @@ If a deployed revision fails health or oracle checks:
 3. **Narrowest defensible claim:** Across all checked boundaries in the three shipped scenarios (`live_revenue`, `customers_and_regions`, `missing_evidence`), every preserved, repaired, and rebuilt state matches independent native SQLite integer recomputation (`0` mismatches), and injected cache corruption halts the run immediately.
 4. **Next test needed:** End-to-end live PostgreSQL logical replication testing under concurrent write connections with LSN snapshot alignment.
 
-The demo's process-local rate limiter identifies clients by the socket peer
-reported by the server. Behind a reverse proxy, multiple visitors may share
-one limit unless the server is configured to trust forwarding headers from
-verified proxy addresses. Do not trust client-supplied forwarding headers
-without establishing that proxy boundary; the limiter is not distributed.
+On Render the demo uses `CF-Connecting-IP`, which Render documents as set by
+its public Cloudflare edge, for process-local rate limits. Outside Render it
+uses the socket peer and does not trust that header. This assumes requests on
+Render arrive through the public edge: private-network callers able to reach
+the service directly must be trusted or blocked because they can supply that
+header. The limiter is per process, not distributed across workers or replicas.
