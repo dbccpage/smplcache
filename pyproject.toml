@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "smplcache"
 version = "0.1.0"
-description = "A theorem-backed diagnostic cache engine for relational workloads."
+description = "A boundary-tested diagnostic cache engine for relational workloads."
 readme = "README.md"
 authors = [
-    { name = "Jeremy Carroll", email = "author@example.com" }
+    { name = "Jeremy Carroll" }
 ]
 license = { text = "Apache-2.0" }
 classifiers = [
@@ -18,19 +18,45 @@ classifiers = [
     "Topic :: Database",
 ]
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "sqlglot>=20.0",
+]
+
+[project.scripts]
+smplcache = "smplcache.cli:main"
 
 [project.urls]
-"Homepage" = "https://github.com/anomalon/smplcache"
-"Bug Tracker" = "https://github.com/anomalon/smplcache/issues"
+"Homepage" = "https://github.com/dbccpage/smplcache"
+"Bug Tracker" = "https://github.com/dbccpage/smplcache/issues"
 
 [project.optional-dependencies]
+numpy = [
+    "numpy>=1.24",
+]
+matrix = [
+    "numpy>=1.24",
+]
+demo = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "pydantic>=2.6.0",
+    "httpx>=0.27.0",
+]
 dev = [
     "pytest>=7.0",
+    "hypothesis>=6.0",
     "black",
-    "mypy"
+    "mypy",
+    "numpy>=1.24",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "pydantic>=2.6.0",
+    "httpx>=0.27.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["smplcache", "smplcache.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "demo/tests"]

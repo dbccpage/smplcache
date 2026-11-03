@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: smplcache-live
+    runtime: python
+    branch: feature/upgrades-1-3-join-wtinylfu-shared-pool
+    plan: free
+    region: oregon
+    buildCommand: pip install --upgrade pip && pip install ".[demo]"
+    startCommand: uvicorn demo.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    domains:
+      - smplcache.anomalon.com
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
