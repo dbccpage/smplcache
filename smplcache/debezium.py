@@ -86,6 +86,9 @@ def _coerce_wal_value(
     if val is None:
         return None
     c_type = (col_type or "").lower()
+    is_float_type = "decimal" not in c_type and any(
+        tok in c_type for tok in ("float", "double", "real")
+    )
     is_decimal_type = (
         any(
             tok in c_type
@@ -93,9 +96,6 @@ def _coerce_wal_value(
                 "decimal",
                 "numeric",
                 "money",
-                "float",
-                "double",
-                "real",
             )
         )
         or col_name in numeric_cols_set
@@ -123,11 +123,20 @@ def _coerce_wal_value(
         raw_v = val.get("value")
         scale = val.get("scale", 0)
         try:
-            return Decimal(str(raw_v)) / (Decimal(10) ** int(scale))
+            unscaled = Decimal(str(raw_v))
+            if not unscaled.is_finite():
+                return val
+            parts = unscaled.as_tuple()
+            return Decimal((parts.sign, parts.digits, int(parts.exponent) - int(scale)))
         except (ValueError, InvalidOperation, TypeError):
             return val
 
     if isinstance(val, str):
+        if is_float_type:
+            try:
+                return float(val)
+            except ValueError:
+                return val
         if is_decimal_type:
             try:
                 return Decimal(val)
@@ -138,8 +147,8 @@ def _coerce_wal_value(
                 return int(val)
             except ValueError:
                 return val
-    if isinstance(val, float) and is_decimal_type:
-        return Decimal(str(val))
+    # Keep JSON floats as floats: converting them to Decimal would conceal
+    # lost precision from the certifier for numeric and float database columns.
     return val
 
 

@@ -34,8 +34,8 @@ This curriculum adapts the cognitive progression model from behavioral decision 
   - Mechanism: Fail-closed boundary testing (Theorem 7): refuse repair when evidence is absent.
 
   [Level 3: In-Place Signed Delta Repair]
-  - Problem: Aggregate queries waste 90%+ of primary DB CPU recomputing on every write.
-  - Mechanism: In-place signed delta arithmetic ([h(e)] = 0) with zero intermediate state.
+  - Problem: Recomputing aggregates after every write can impose avoidable database work.
+  - Mechanism: In-place signed delta arithmetic with aggregate state and, for joins, auxiliary row and index state.
 
   [Level 4: Auxiliary Semi-Join Multiplicity Tracking]
   - Problem: Multi-table joins cannot resolve foreign-key fanout from final aggregates alone.
@@ -217,7 +217,7 @@ When the defect $h(e)$ is an exact coboundary ($[h(e)] = 0$), SimpleCache applie
 - **Group Migration (e.g., order reassigned to a different customer):** 
   `cache[old_group] -= old_amount` and `cache[new_group] += new_amount`
 
-This repair executes in $O(1)$ time with zero primary database reads and zero intermediate operator memory.
+This single-table example applies a fixed number of aggregate updates without a primary database read. Its aggregate state is retained; join repairs additionally use auxiliary rows and indexes and can depend on fanout.
 
 #### 3. Code / CLI Example
 ```python
@@ -338,7 +338,7 @@ python -m smplcache.cli ingest --benchmark --transactions 10 --zipf-s 1.2
 ```
 
 #### 4. Explicit Invariant / "What It Does NOT Do"
-- **Invariant:** Eviction never causes silent stale reads. Evicted keys are marked as tainted, forcing fail-closed invalidation on subsequent writes:
+- **Tested boundary:** The modeled evicted keys are marked as tainted, forcing invalidation when a later event needs that evidence:
   $$
   \operatorname{PK}(e) \in \operatorname{EvictedPKs} \implies \text{Decision.invalidate("evicted_join_auxiliary_key")}
   $$

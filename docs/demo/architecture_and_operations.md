@@ -111,5 +111,13 @@ If a deployed revision fails health or oracle checks:
 
 1. **What it supports:** Demonstrates in a deterministic, seeded SQLite setting that SmplCache preserves or incrementally repairs admitted SPJA query results when complete before/after row evidence is present, and falls back to snapshot recomputation when evidence is omitted or resident auxiliary join keys are evicted.
 2. **What it does not support:** Does not establish arbitrary-SQL support, external RDBMS collation/floating-point parity, total process RAM bounds from auxiliary row limits, or durable live PostgreSQL replication delivery.
+
 3. **Narrowest defensible claim:** Across all checked boundaries in the three shipped scenarios (`live_revenue`, `customers_and_regions`, `missing_evidence`), every preserved, repaired, and rebuilt state matches independent native SQLite integer recomputation (`0` mismatches), and injected cache corruption halts the run immediately.
 4. **Next test needed:** End-to-end live PostgreSQL logical replication testing under concurrent write connections with LSN snapshot alignment.
+
+On Render the demo uses `CF-Connecting-IP`, which Render documents as set by
+its public Cloudflare edge, for process-local rate limits. Outside Render it
+uses the socket peer and does not trust that header. This assumes requests on
+Render arrive through the public edge: private-network callers able to reach
+the service directly must be trusted or blocked because they can supply that
+header. The limiter is per process, not distributed across workers or replicas.

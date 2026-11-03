@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
+import re
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 
@@ -108,9 +109,27 @@ def _normalize_group_atom(val: Any) -> Any:
         if d == d.to_integral_value():
             return int(d)
         return d
-    if isinstance(val, Decimal) and val == val.to_integral_value():
-        return int(val)
+    if isinstance(val, Decimal):
+        if not val.is_finite():
+            raise ValueError("Nonfinite group keys are unsupported")
+        if val == val.to_integral_value():
+            return int(val)
     return val
+
+
+def _checked_group_atom(val: Any) -> Any:
+    # Python dicts equate True with 1; database group semantics vary by type.
+    # Float grouping also depends on the database's numeric representation.
+    if isinstance(val, (bool, float)):
+        raise TypeError("Boolean and float group keys are unsupported")
+    return _normalize_group_atom(val)
+
+
+def _aggregate_decimal(val: Any) -> Decimal:
+    # Decimal(str(float)) does not reproduce a database's binary float SUM.
+    if isinstance(val, float):
+        raise TypeError("Float SUM/AVG evidence is unsupported")
+    return _to_decimal(val)
 
 
 def _values_equal(a: Any, b: Any) -> bool:
@@ -211,6 +230,8 @@ class Predicate:
             # SQL three-valued logic: NULL compared with any literal in WHERE is UNKNOWN (falsy)
             if val is None or lit is None:
                 return False
+            if isinstance(val, float) or isinstance(lit, float):
+                raise TypeError("Float predicate evidence is unsupported")
             if isinstance(lit, bool) or isinstance(val, bool):
                 if type(val) is not type(lit):
                     raise TypeError(
@@ -317,7 +338,7 @@ class QueryShape:
         if aggregate_cols is not None:
             agg_list = [str(a).lower() for a in aggregate_cols]
             for a in agg_list:
-                if "min" in a or "max" in a:
+                if re.match(r"^\s*(?:min|max)\s*\(", a):
                     supported = False
                     reason = reason or "min_max_requires_auxiliary_state"
             if len(agg_list) == 1 and resolved_agg_col is None:
@@ -388,10 +409,8 @@ class QueryShape:
         if not self.group_cols:
             return ()
         if len(self.group_cols) == 1:
-            return _normalize_group_atom(lower_row.get(self.group_cols[0]))
-        return tuple(
-            _normalize_group_atom(lower_row.get(col)) for col in self.group_cols
-        )
+            return _checked_group_atom(lower_row.get(self.group_cols[0]))
+        return tuple(_checked_group_atom(lower_row.get(col)) for col in self.group_cols)
 
 
 @dataclass
@@ -500,7 +519,7 @@ class AggregateCache:
                 if raw_val is not None:
                     n_cur += 1
                     if shape.agg_fn in ("sum", "avg"):
-                        s_cur = _decimal_add(s_cur, _to_decimal(raw_val))
+                        s_cur = _decimal_add(s_cur, _aggregate_decimal(raw_val))
             cache._group_state[g_key] = (s_cur, n_cur, r_cur)
 
         for g_key in list(cache._group_state.keys()):
@@ -582,7 +601,7 @@ def _row_contribution(
         return True, Decimal(0), 1
 
     if shape.agg_fn in ("sum", "avg"):
-        return True, _to_decimal(raw_val), 1
+        return True, _aggregate_decimal(raw_val), 1
 
     raise ValueError(f"Unsupported aggregate function: {shape.agg_fn}")
 
@@ -653,6 +672,18 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
     new_map = {str(k).lower(): v for k, v in (event.new or {}).items()}
     caller_cols = frozenset(str(c).lower() for c in (event.changed_cols or set()))
     unavail_cols = frozenset(str(c).lower() for c in (event.unavailable_cols or set()))
+
+    for row in (old_map, new_map):
+        if any(isinstance(row.get(col), (bool, float)) for col in shape.group_cols):
+            return Decision.invalidate("invalid_evidence_type", cert)
+        if (
+            shape.agg_fn in ("sum", "avg")
+            and shape.agg_col is not None
+            and isinstance(row.get(shape.agg_col), float)
+        ):
+            return Decision.invalidate("invalid_evidence_type", cert)
+        if any(isinstance(row.get(col), float) for col in shape.predicate.columns):
+            return Decision.invalidate("invalid_evidence_type", cert)
 
     if unavail_cols & shape.security_cols:
         return Decision.invalidate("security_column_changed", cert)

@@ -10,10 +10,8 @@ Unlike traditional heuristic caches that flush everything or rely on logical rep
 
 - [15-Minute Adoption Quickstart](docs/quickstart_15_minute_adoption.md)
 - [8-Level Pedagogical Curriculum](docs/pedagogical_8_level_curriculum.md)
-- [SOTA Systems Review & Commercial Strategy](docs/sota_caching_review_and_commercial_strategy.md)
 - [SmplCache Live MVP Specification](docs/mvp_smplcache_anomalon.md)
 - [SmplCache Live Architecture & Operations](docs/demo/architecture_and_operations.md)
-- [Research Forum Dossier](docs/research_forum/README.md)
 
 ---
 
@@ -144,9 +142,7 @@ See [8-Level Curriculum](docs/pedagogical_8_level_curriculum.md) for full detail
 5. Machine-readable decision certificates and SQLite differential/property tests.
 6. Interactive **SmplCache Live** web demonstration (`demo/`) with side-by-side table-invalidation baseline comparison, independent native SQLite verification, reproducible decision traces, and Render deployment configuration (`render.yaml` and `Dockerfile`).
 
-The commercial strategy and research-forum documents contain proposals, target
-pricing, and hypotheses. They are not evidence of shipped compliance features,
-measured production RAM savings, or superiority to other products. The adapter
+The adapter
 consumes decoded JSON fixtures; it is not a native PostgreSQL `pgoutput` binary
 protocol client. Live replication, durable offsets, duplicate suppression, and
 production concurrency remain integration work.
@@ -156,6 +152,19 @@ eviction tombstones, frequency history, output groups, and transient work also u
 memory. Decimal sums retain finite input digits; displayed `AVG` division follows
 the active Decimal context and is not an exact rational or a universal database
 rounding guarantee.
+
+Join maintenance requires each right-side join key to be that table's primary
+key. The default key name is `id`; provide the same accurate `primary_keys`
+mapping to SQL extraction and auxiliary-state seeding when it differs. The
+extractor does not inspect the database schema, and seeding rejects duplicate
+or null primary keys.
+
+Boolean and float group and join keys, float predicate values, and float
+SUM/AVG evidence are rejected rather than being interpreted using Python
+equality or Decimal arithmetic. Use integer
+or exact Decimal aggregate inputs; JSON float representations of database
+numeric values are not exact evidence. Database collation, numeric precision,
+and AVG rounding must still match the integration's declared semantics.
 
 See the [PR #7 review](docs/reviews/pr7_review.md), the
 [SmplCache Live MVP specification](docs/mvp_smplcache_anomalon.md), and the
@@ -178,7 +187,6 @@ In accordance with the project Claim Hygiene Rule:
 - Mathematical foundations: `docs/smplcache_theory_quotient_repairability.md`
 - Dependency fingerprinting: `docs/dependency_fingerprinting.md`
 - Invalidation rules: `docs/invalidation_rules.md`
-- Research Forum Dossier: `docs/research_forum/`
 
 ## License
 Apache 2.0 License. See [LICENSE](LICENSE).

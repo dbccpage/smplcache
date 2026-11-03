@@ -22,7 +22,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from smplcache.join import JoinClause, JoinType, MultiTableJoinShape
-from smplcache.smplcache import AggFn, Predicate, QueryShape
+from smplcache.smplcache import AggFn, Predicate, QueryShape, normalize_relation
 
 ALLOWED_AST_NODE_TYPES = {
     exp.Select,
@@ -442,11 +442,17 @@ def parse_join_sql(
     dialect: str = "postgres",
     name: str = "extracted_join_shape",
     security_cols: Iterable[tuple[str, str]] = (),
+    primary_keys: Mapping[str, str] | None = None,
 ) -> JoinExtractorResult:
     """
     AST allowlist extractor for Upgrade 3 foreign-key `INNER JOIN` and `LEFT JOIN`
     queries. Requires explicit table/alias qualification on all column references
     and `ON left.col = right.col` equijoin predicates.
+
+    Each right join key must be the declared primary key. The default is `id`;
+    pass `primary_keys` for other names and use the same mapping when seeding.
+    This function does not inspect the database schema: callers must supply
+    accurate primary-key metadata.
     """
     if not sql or not isinstance(sql, str) or not sql.strip():
         return JoinExtractorResult(False, reason="EmptyStatement")
@@ -643,9 +649,16 @@ def parse_join_sql(
         else:
             return JoinExtractorResult(False, reason="UnresolvedJoinQualifiers")
 
+        right_relation = f"{r_node.db.lower()}.{r_rel}" if r_node.db else r_rel
+        pk_map = {
+            normalize_relation(k): v.lower() for k, v in (primary_keys or {}).items()
+        }
+        if resolved_right_key != pk_map.get(normalize_relation(right_relation), "id"):
+            return JoinExtractorResult(False, reason="RightJoinKeyNotPrimaryKey")
+
         join_clauses.append(
             JoinClause(
-                right_relation=f"{r_node.db.lower()}.{r_rel}" if r_node.db else r_rel,
+                right_relation=right_relation,
                 left_qualifier=resolved_left_qual,
                 left_key=resolved_left_key,
                 right_key=resolved_right_key,
