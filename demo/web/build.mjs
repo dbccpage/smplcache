@@ -21,7 +21,7 @@ execSync("npx tsc --project tsconfig.json --noEmit false --outDir .tsbuild", {
 
 // 2. Read compiled main.js and styles.css, compute content hashes
 const mainJsPath = path.join(tmpOutDir, "main.js");
-let mainJs = fs.readFileSync(mainJsPath, "utf-8");
+let mainJs = fs.readFileSync(mainJsPath, "utf-8").replace(/\r\n/g, "\n");
 // Strip any type-only or CSS side-effect imports
 mainJs = mainJs.replace(/^import\s+["']\.\/styles\.css["'];?\s*$/gm, "");
 
@@ -29,7 +29,8 @@ const cssPath = path.join(__dirname, "src", "styles.css");
 // The shared Anomalon design system (tokens, header, footer, chips) ships first, then local styles.
 const sharedCssPath = path.join(__dirname, "src", "anomalon.css");
 const cssContent =
-  fs.readFileSync(sharedCssPath, "utf-8") + "\n" + fs.readFileSync(cssPath, "utf-8");
+  (fs.readFileSync(sharedCssPath, "utf-8") + "\n" + fs.readFileSync(cssPath, "utf-8"))
+    .replace(/\r\n/g, "\n");
 
 const jsHash = crypto.createHash("sha256").update(mainJs).digest("hex").slice(0, 10);
 const cssHash = crypto.createHash("sha256").update(cssContent).digest("hex").slice(0, 10);
@@ -41,7 +42,7 @@ fs.writeFileSync(path.join(assetsDir, jsFilename), mainJs, "utf-8");
 fs.writeFileSync(path.join(assetsDir, cssFilename), cssContent, "utf-8");
 
 // 3. Generate production dist/index.html
-const rawHtml = fs.readFileSync(path.join(__dirname, "index.html"), "utf-8");
+const rawHtml = fs.readFileSync(path.join(__dirname, "index.html"), "utf-8").replace(/\r\n/g, "\n");
 const prodHtml = rawHtml
   .replace(
     "</head>",

@@ -921,12 +921,12 @@ ${escapeHtml(run?.claim_hygiene.next_test_needed ?? "")}
       <footer class="footer-section">
         <div>
           Anomalon · SmplCache Live · Apache-2.0 ·
-          <span class="commit-tag" title="Engine & App Git Revision">commit: ${escapeHtml(run?.engine_commit ?? "bbc5d703a297")}</span>
+          <span class="commit-tag" title="Engine & App Git Revision">commit: ${escapeHtml(run?.engine_commit ?? "unavailable")}</span>
         </div>
         <div style="display:flex; gap:1rem; flex-wrap:wrap;">
           <a href="https://github.com/dbccpage/smplcache" target="_blank" rel="noopener noreferrer">Source</a>
-          <a href="https://github.com/dbccpage/smplcache/blob/bbc5d703a29751a23ad1782a31e92abc250ea04c/docs/reviews/pr7_review.md" target="_blank" rel="noopener noreferrer">PR #7 review</a>
-          <a href="https://github.com/dbccpage/smplcache/blob/bbc5d703a29751a23ad1782a31e92abc250ea04c/docs/mvp_smplcache_anomalon.md" target="_blank" rel="noopener noreferrer">MVP specification</a>
+          <a href="https://github.com/dbccpage/smplcache/blob/main/docs/reviews/pr7_review.md" target="_blank" rel="noopener noreferrer">PR #7 review</a>
+          <a href="https://github.com/dbccpage/smplcache/blob/main/docs/mvp_smplcache_anomalon.md" target="_blank" rel="noopener noreferrer">MVP specification</a>
           <a href="/api/scenarios" target="_blank" rel="noopener noreferrer">/api/scenarios</a>
           <a href="/healthz" target="_blank" rel="noopener noreferrer">/healthz</a>
           <a href="https://www.anomalon.com/about">About</a>

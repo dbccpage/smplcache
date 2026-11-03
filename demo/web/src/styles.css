@@ -831,3 +831,7 @@ a:focus-visible {
   .an-nav.an-nav--inline { display: flex; position: static; flex-direction: row; gap: 16px; padding: 0; border: 0; background: transparent; }
   .an-nav.an-nav--inline a { padding: 0; }
 }
+
+@media (max-width: 400px) {
+  .an-brand__tool { display: none; }
+}
