@@ -2,7 +2,7 @@ services:
   - type: web
     name: smplcache-live
     runtime: python
-    branch: feature/upgrades-1-3-join-wtinylfu-shared-pool
+    branch: main
     plan: free
     region: oregon
     buildCommand: pip install --upgrade pip && pip install ".[demo]"
