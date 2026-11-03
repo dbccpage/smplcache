@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
+import re
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 
@@ -317,7 +318,7 @@ class QueryShape:
         if aggregate_cols is not None:
             agg_list = [str(a).lower() for a in aggregate_cols]
             for a in agg_list:
-                if "min" in a or "max" in a:
+                if re.match(r"^\s*(?:min|max)\s*\(", a):
                     supported = False
                     reason = reason or "min_max_requires_auxiliary_state"
             if len(agg_list) == 1 and resolved_agg_col is None:

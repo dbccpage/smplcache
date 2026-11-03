@@ -157,6 +157,18 @@ memory. Decimal sums retain finite input digits; displayed `AVG` division follow
 the active Decimal context and is not an exact rational or a universal database
 rounding guarantee.
 
+Join maintenance requires each right-side join key to be that table's primary
+key. The default key name is `id`; provide the same accurate `primary_keys`
+mapping to SQL extraction and auxiliary-state seeding when it differs. The
+extractor does not inspect the database schema, and seeding rejects duplicate
+or null primary keys.
+
+Group keys use Python equality, including the equality of `True` and `1`.
+Float inputs are converted to Decimal for arithmetic; this does not reproduce
+a database's binary floating-point SUM. Integrations must ensure their database
+grouping and numeric semantics match these assumptions before relying on a
+certificate.
+
 See the [PR #7 review](docs/reviews/pr7_review.md), the
 [SmplCache Live MVP specification](docs/mvp_smplcache_anomalon.md), and the
 [SmplCache Live architecture & operations runbook](docs/demo/architecture_and_operations.md).

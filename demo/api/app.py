@@ -124,7 +124,10 @@ def create_app(web_dist_dir: Path | None = None) -> FastAPI:
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
-                if int(content_length) > MAX_REQUEST_BODY_BYTES:
+                length = int(content_length)
+                if length < 0:
+                    raise ValueError("negative content length")
+                if length > MAX_REQUEST_BODY_BYTES:
                     return JSONResponse(
                         status_code=413,
                         content={"detail": "Request payload exceeds 16 KB limit."},
@@ -134,6 +137,18 @@ def create_app(web_dist_dir: Path | None = None) -> FastAPI:
                     status_code=400,
                     content={"detail": "Invalid Content-Length header."},
                 )
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request payload exceeds 16 KB limit."},
+                )
+            chunks.append(chunk)
+        # Starlette's cached request replays this bounded body to downstream code.
+        request._body = b"".join(chunks)
         response = await call_next(request)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
@@ -215,7 +230,7 @@ def create_app(web_dist_dir: Path | None = None) -> FastAPI:
             if full_path:
                 candidate = (resolved_dist / full_path).resolve()
                 if (
-                    str(candidate).startswith(str(resolved_dist.resolve()))
+                    candidate.is_relative_to(resolved_dist.resolve())
                     and candidate.is_file()
                 ):
                     return FileResponse(str(candidate))

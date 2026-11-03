@@ -937,6 +937,10 @@ class JoinAuxState:
             max_rows_per_table=max_rows_per_table,
             max_fk_fanout=max_fk_fanout,
         )
+        for seed_shape in state.all_shapes():
+            for join in seed_shape.joins:
+                if join.right_key.lower() != state.pk_col_for(join.right_relation):
+                    raise ValueError("Right join key must be the primary key")
         managed_rels = state.all_relations()
         # Validate the complete seed before indexing or eviction can hide duplicates.
         supplied_rels = {normalize_relation(r) for r in tables}
@@ -1530,6 +1534,11 @@ def certify_join_event(
         return Decision.unsupported(
             shape.unsupported_reason or "unsupported_join_shape", cert
         )
+
+    for join in shape.joins:
+        pk_col = aux_state.pk_col_for(join.right_relation) if aux_state else "id"
+        if join.right_key.lower() != pk_col:
+            return Decision.unsupported("right_join_key_not_primary_key", cert)
 
     if shape.agg_fn is not None and shape.agg_fn not in (
         "sum",

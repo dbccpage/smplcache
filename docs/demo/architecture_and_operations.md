@@ -111,5 +111,12 @@ If a deployed revision fails health or oracle checks:
 
 1. **What it supports:** Demonstrates in a deterministic, seeded SQLite setting that SmplCache preserves or incrementally repairs admitted SPJA query results when complete before/after row evidence is present, and falls back to snapshot recomputation when evidence is omitted or resident auxiliary join keys are evicted.
 2. **What it does not support:** Does not establish arbitrary-SQL support, external RDBMS collation/floating-point parity, total process RAM bounds from auxiliary row limits, or durable live PostgreSQL replication delivery.
+
 3. **Narrowest defensible claim:** Across all checked boundaries in the three shipped scenarios (`live_revenue`, `customers_and_regions`, `missing_evidence`), every preserved, repaired, and rebuilt state matches independent native SQLite integer recomputation (`0` mismatches), and injected cache corruption halts the run immediately.
 4. **Next test needed:** End-to-end live PostgreSQL logical replication testing under concurrent write connections with LSN snapshot alignment.
+
+The demo's process-local rate limiter identifies clients by the socket peer
+reported by the server. Behind a reverse proxy, multiple visitors may share
+one limit unless the server is configured to trust forwarding headers from
+verified proxy addresses. Do not trust client-supplied forwarding headers
+without establishing that proxy boundary; the limiter is not distributed.

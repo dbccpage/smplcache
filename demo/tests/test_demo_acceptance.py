@@ -25,6 +25,27 @@ from demo.scenarios.runner import ScenarioConfig, execute_scenario_run
 client = TestClient(create_app())
 
 
+def test_chunked_body_cannot_bypass_size_limit() -> None:
+    response = client.post(
+        "/api/runs",
+        content=iter([b"x" * 9000, b"x" * 9000]),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
+def test_spa_does_not_serve_sibling_with_matching_prefix(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("shell", encoding="utf-8")
+    sibling = tmp_path / "dist-private"
+    sibling.mkdir()
+    (sibling / "secret.txt").write_text("private-data", encoding="utf-8")
+    test_client = TestClient(create_app(dist))
+    response = test_client.get("/..%2Fdist-private%2Fsecret.txt")
+    assert "private-data" not in response.text
+
+
 def test_healthz_and_version_endpoints() -> None:
     r_health = client.get("/healthz")
     assert r_health.status_code == 200
