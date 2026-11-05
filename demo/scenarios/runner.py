@@ -52,70 +52,74 @@ REGIONS_TABLE_SEED: tuple[dict[str, Any], ...] = (
 
 PLAIN_LANGUAGE_REASONS: dict[str, str] = {
     "disjoint_columns": (
-        "Preserve — the changed column (delivery note) is outside the query's "
-        "dependency boundary, so the cached total remains valid without querying SQLite."
+        "KEEP — the changed column (delivery note) is outside the query's "
+        "dependency set, so the cached total remains valid without querying SQLite."
     ),
     "noop_update": (
-        "Preserve — neither before nor after row state alters the filtered aggregate "
+        "KEEP — neither before nor after row state alters the filtered aggregate "
         "contribution."
     ),
     "unrelated_relation": (
-        "Preserve — write targeted a different table or tenant schema outside this "
-        "query's bound relation."
+        "KEEP — write targeted a different table or tenant schema outside this "
+        "query's bound tables."
     ),
     "transaction_rollback": (
-        "Preserve — transaction rolled back; buffered writes were discarded without "
+        "KEEP — transaction rolled back; buffered writes were discarded without "
         "touching committed state."
     ),
     "value_change": (
-        "Repair — complete before/after row evidence permits an exact in-place delta "
+        "FIX IN PLACE — complete before/after row evidence permits an exact in-place delta "
         "update to the group sum."
     ),
     "predicate_entry": (
-        "Repair — order status transitioned into the WHERE status = 'paid' filter; "
+        "FIX IN PLACE — order status transitioned into the WHERE status = 'paid' filter; "
         "added row contribution in place."
     ),
     "predicate_exit": (
-        "Repair — order status exited the WHERE status = 'paid' filter; subtracted "
+        "FIX IN PLACE — order status exited the WHERE status = 'paid' filter; subtracted "
         "prior row contribution in place."
     ),
     "group_move": (
-        "Repair — row moved between GROUP BY buckets; subtracted from old group and "
+        "FIX IN PLACE — row moved between GROUP BY buckets; subtracted from old group and "
         "added to new group in place."
     ),
     "insert": (
-        "Repair — inserted row carries complete required columns; updated aggregate "
+        "FIX IN PLACE — inserted row carries complete required columns; updated aggregate "
         "state in place."
     ),
     "delete": (
-        "Repair — deleted row carries complete before-image evidence; decremented "
+        "FIX IN PLACE — deleted row carries complete before-image evidence; decremented "
         "group sum and row count (removing empty groups when count reaches zero)."
     ),
     "join_fact_update": (
-        "Repair — fact-table change resolved against resident foreign-key dimension "
-        "rows in JoinAuxState; updated joined regional totals in place."
+        "FIX IN PLACE — fact-table change resolved against cached join lookup "
+        "rows; updated joined regional totals in place."
     ),
     "dimension_update": (
-        "Repair — customer moved between regions; JoinAuxState resolved all child "
+        "FIX IN PLACE — customer moved between regions; cached join lookup rows resolved all child "
         "orders in the foreign-key fanout and transferred their revenue between regions."
     ),
     "fk_reparent": (
-        "Repair — order foreign key reparented to a different customer; JoinAuxState "
+        "FIX IN PLACE — order foreign key reparented to a different customer; cached join lookup rows "
+        "updated multiplicity indexes and moved revenue between regions in place."
+    ),
+    "foreign_key_reparent": (
+        "FIX IN PLACE — order foreign key reparented to a different customer; cached join lookup rows "
         "updated multiplicity indexes and moved revenue between regions in place."
     ),
     "missing_evidence_for_repair": (
-        "Invalidate / Recompute — CDC event omitted required before-image evidence "
+        "REREAD — change log omitted required before-image evidence "
         "(amount_cents). SmplCache refused to guess, withheld the stale cache, and "
-        "rebuilt from the committed SQLite snapshot."
+        "reread from the committed SQLite snapshot."
     ),
     "evicted_join_auxiliary_key": (
-        "Invalidate / Recompute — event referenced a key evicted under the configured "
-        "resident auxiliary row limit. SmplCache refused unverified join repair and "
-        "rebuilt from the 3 source tables."
+        "REREAD — event referenced a key evicted under the configured "
+        "resident lookup row limit. SmplCache refused unverified join repair and "
+        "reread from the 3 source tables."
     ),
     "cache_requires_rebuild": (
-        "Invalidate / Recompute — cache was latched invalid from an earlier unverified "
-        "boundary; repair remained blocked until snapshot rebuild completed."
+        "REREAD — cache was latched invalid from an earlier unverified "
+        "step; repair remained blocked until snapshot reread completed."
     ),
 }
 
@@ -1141,8 +1145,8 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "title": "Update paid order amount ($100.00 -> $125.00)",
             "action_label": "Increase Order #101 amount (+$25.00)",
             "narration": (
-                "Order #101 increases by $25.00. JoinAuxState resolves Customer #1 "
-                "-> Region #1 (North America) in memory and repairs North America's "
+                "Order #101 increases by $25.00. Cached join lookup rows resolve Customer #1 "
+                "-> Region #1 (North America) in memory and repair North America's "
                 "joined total without querying SQLite."
             ),
             "table_written": "orders",
@@ -1186,7 +1190,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Move Customer #1 region (1-to-k fanout repair)",
             "narration": (
                 "Dimension table update: Customer #1 moves from Region 1 (North America) "
-                "to Region 2 (Europe). JoinAuxState traverses the foreign-key index to "
+                "to Region 2 (Europe). SmplCache traverses its foreign-key lookup index to "
                 "locate all paid orders belonging to Customer #1 and transfers their "
                 "combined revenue from North America to Europe in place."
             ),
@@ -1227,7 +1231,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Reparent Order #103 foreign key to Customer #3",
             "narration": (
                 "Order #103 ($150.00) changes customer_id from 1 (Europe) to 3 "
-                "(Asia Pacific). JoinAuxState updates its foreign-key multiplicity "
+                "(Asia Pacific). SmplCache updates its foreign-key multiplicity "
                 "index and moves $150.00 from Europe to Asia Pacific."
             ),
             "table_written": "orders",
@@ -1271,7 +1275,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Commit atomic customer + order transaction (+$95.00)",
             "narration": (
                 "A single BEGIN ... COMMIT transaction inserts Customer #9001 in "
-                "Latin America and paid Order #9001 ($95.00). WalStreamProcessor "
+                "Latin America and paid Order #9001 ($95.00). The WAL stream processor "
                 "buffers the transaction until COMMIT and repairs Latin America."
             ),
             "table_written": "customers,orders",
@@ -1337,8 +1341,8 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Abort multi-table write transaction",
             "narration": (
                 "An aborted transaction attempts to delete Order #101 and update "
-                "Customer #2, then issues ROLLBACK. WalStreamProcessor discards "
-                "the buffered records and certifies preserve (transaction_rollback)."
+                "Customer #2, then issues ROLLBACK. The WAL stream processor discards "
+                "the buffered records and certifies KEEP (transaction_rollback)."
             ),
             "table_written": "none (rolled back)",
             "operation": "ROLLBACK",
@@ -1372,7 +1376,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Update Order #106 without old amount_cents",
             "narration": (
                 "Order #106 increases from $200.00 to $240.00 without old.amount_cents. "
-                "SmplCache invalidates and rebuildsJoinAuxState + AggregateCache from "
+                "SmplCache rereads and rebuilds the cached join lookup rows and totals from "
                 "all 3 participating tables (orders, customers, regions = 3 source "
                 "queries vs. 1 joined baseline query), disclosing exact multi-table "
                 "rebuild overhead."
