@@ -224,44 +224,75 @@ class MultiTableJoinShape:
             if self.qualifier_to_relation(q) == target_rel
         )
 
-    def table_fingerprint(self, relation: str) -> frozenset[str]:
+    def table_dependency_set(self, relation: str) -> dict[str, frozenset[str]]:
         """
-        Return all columns of `relation` that the join query result depends on
-        (including join keys, aggregate columns, group keys, predicate columns,
-        projected columns, and security columns).
+        Decompose `relation`'s dependency columns in this query into:
+        - `read_cols`: aggregate argument and projected columns
+        - `join_keys`: equijoin columns on either side of `JOIN ... ON`
+        - `filter_cols`: `WHERE` predicate columns
+        - `group_cols`: `GROUP BY` columns
+        - `security_cols`: row-level security columns
         """
         target_rel = normalize_relation(relation)
-        cols: set[str] = set()
+        read_cols: set[str] = set()
+        join_keys: set[str] = set()
+        filter_cols: set[str] = set()
+        group_cols: set[str] = set()
+        security_cols: set[str] = set()
 
         for j in self.joins:
             if self.qualifier_to_relation(j.left_qualifier) == target_rel:
-                cols.add(j.left_key.lower())
+                join_keys.add(j.left_key.lower())
             if normalize_relation(j.right_relation) == target_rel:
-                cols.add(j.right_key.lower())
+                join_keys.add(j.right_key.lower())
 
         if (
             self.agg_col is not None
             and self.qualifier_to_relation(self.agg_col[0]) == target_rel
         ):
-            cols.add(self.agg_col[1].lower())
-
-        for q, c in self.group_cols:
-            if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
-
-        for q, c, _, _ in self.predicate_terms:
-            if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
+            read_cols.add(self.agg_col[1].lower())
 
         for q, c in self.projection_cols:
             if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
+                read_cols.add(c.lower())
+
+        for q, c in self.group_cols:
+            if self.qualifier_to_relation(q) == target_rel:
+                group_cols.add(c.lower())
+
+        for q, c, _, _ in self.predicate_terms:
+            if self.qualifier_to_relation(q) == target_rel:
+                filter_cols.add(c.lower())
 
         for q, c in self.security_cols:
             if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
+                security_cols.add(c.lower())
 
-        return frozenset(cols)
+        return {
+            "read_cols": frozenset(read_cols),
+            "join_keys": frozenset(join_keys),
+            "filter_cols": frozenset(filter_cols),
+            "group_cols": frozenset(group_cols),
+            "security_cols": frozenset(security_cols),
+        }
+
+    def dependency_set(self) -> dict[str, dict[str, frozenset[str]]]:
+        """Return the structured dependency set for every participating table."""
+        return {rel: self.table_dependency_set(rel) for rel in sorted(self.relations())}
+
+    def table_fingerprint(self, relation: str) -> frozenset[str]:
+        """
+        Return all columns of `relation` that the join query result depends on,
+        derived directly from `table_dependency_set(relation)`.
+        """
+        deps = self.table_dependency_set(relation)
+        return (
+            deps["read_cols"]
+            | deps["join_keys"]
+            | deps["filter_cols"]
+            | deps["group_cols"]
+            | deps["security_cols"]
+        )
 
     def table_required_evidence(
         self, relation: str, pk_col: str = "id"
@@ -403,6 +434,17 @@ class JoinAuxState:
                 l_key = j.left_key.lower()
                 self.fk_index.setdefault((l_rel, l_key), {})
                 self.evicted_fk_buckets.setdefault((l_rel, l_key), set())
+        for raw_rel, rows_map in list(self.table_rows.items()):
+            norm_rel = normalize_relation(raw_rel)
+            if not rows_map:
+                continue
+            normalized_rows: dict[Any, dict[str, Any]] = {}
+            for raw_pk, row in rows_map.items():
+                lower_row = {str(k).lower(): v for k, v in row.items()}
+                norm_pk = _normalize_group_atom(raw_pk)
+                normalized_rows[norm_pk] = lower_row
+                self._index_row_fks(norm_rel, norm_pk, lower_row)
+            self.table_rows[norm_rel] = normalized_rows
 
     def all_shapes(self) -> tuple[MultiTableJoinShape, ...]:
         """Return `(self.shape, *self.extra_shapes)` managed by this auxiliary state."""
@@ -1809,6 +1851,24 @@ def certify_join_event(
         for s_d, n_d, r_d in group_deltas.values()
     )
 
+    rel_join_keys = shape.table_dependency_set(event_rel)["join_keys"]
+    join_key_changed = op == "UPDATE" and any(
+        not _values_equal(old_map.get(jk), new_map.get(jk)) for jk in rel_join_keys
+    )
+
+    if event_rel == base_rel and join_key_changed:
+        cert.repair_program = f"join_{shape.agg_fn}_by_group"
+        return Decision.repair("foreign_key_reparent", cert)
+
+    if (
+        event_rel != base_rel
+        and join_key_changed
+        and matched_facts > 0
+        and (old_contribs or new_contribs)
+    ):
+        cert.repair_program = f"join_{shape.agg_fn}_by_group"
+        return Decision.repair("dimension_update", cert)
+
     if op == "UPDATE" and not has_nonzero_delta:
         return Decision.preserve("noop_update", cert)
 
@@ -1822,13 +1882,6 @@ def certify_join_event(
             return Decision.repair("insert", cert)
         if op == "DELETE":
             return Decision.repair("delete", cert)
-        fk_cols = {
-            j.left_key.lower()
-            for j in shape.joins
-            if shape.qualifier_to_relation(j.left_qualifier) == base_rel
-        }
-        if any(not _values_equal(old_map.get(fk), new_map.get(fk)) for fk in fk_cols):
-            return Decision.repair("foreign_key_reparent", cert)
         if not old_contribs and new_contribs:
             return Decision.repair("predicate_entry", cert)
         if old_contribs and not new_contribs:

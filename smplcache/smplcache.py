@@ -383,17 +383,25 @@ class QueryShape:
     def aggregate_cols(self) -> frozenset[str]:
         return frozenset({self.agg_col}) if self.agg_col else frozenset()
 
+    def dependency_set(self) -> dict[str, frozenset[str]]:
+        return {
+            "read_cols": self.aggregate_cols | self.projection_cols,
+            "join_keys": frozenset(),
+            "filter_cols": self.predicate_cols,
+            "group_cols": frozenset(self.group_cols),
+            "security_cols": self.security_cols,
+        }
+
     @property
     def fingerprint(self) -> FingerprintSet:
-        cols: set[str] = set()
-        if self.agg_col is not None:
-            cols.add(self.agg_col)
-        cols.update(self.group_cols)
-        cols.update(self.predicate.columns)
-        cols.update(self._extra_predicate_cols)
-        cols.update(self.projection_cols)
-        cols.update(self.security_cols)
-        return FingerprintSet(cols)
+        deps = self.dependency_set()
+        return FingerprintSet(
+            deps["read_cols"]
+            | deps["join_keys"]
+            | deps["filter_cols"]
+            | deps["group_cols"]
+            | deps["security_cols"]
+        )
 
     def required_evidence(self) -> frozenset[str]:
         cols: set[str] = set()

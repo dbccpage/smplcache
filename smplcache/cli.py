@@ -30,7 +30,7 @@ from smplcache.benchmark import (
     run_shared_multi_query_pool_benchmark,
     run_zipfian_eviction_sweep,
 )
-from smplcache.extractor import parse_sql
+from smplcache.extractor import parse_join_sql, parse_sql
 from smplcache.smplcache import (
     DecisionKind,
     QueryShape,
@@ -93,6 +93,25 @@ def _shape_from_dict(
                 res.shape,
                 name=name,
                 security_cols=res.shape.security_cols | sec_cols,
+            )
+        join_res = parse_join_sql(raw_sql, name=name)
+        if join_res.is_supported and join_res.shape is not None:
+            jshape = join_res.shape
+            deps = jshape.table_dependency_set(relation)
+            return QueryShape(
+                name=name,
+                relation=relation,
+                predicate_cols=set(deps["filter_cols"])
+                | set(s.get("predicate_cols", [])),
+                aggregate_cols=set(deps["read_cols"])
+                | set(s.get("aggregate_cols", [])),
+                group_cols=tuple(
+                    sorted(set(deps["group_cols"]) | set(s.get("group_cols", [])))
+                ),
+                projection_cols=set(deps["read_cols"])
+                | set(s.get("projection_cols", [])),
+                join_cols=set(deps["join_keys"]) | set(s.get("join_cols", [])),
+                security_cols=sec_cols | deps["security_cols"],
             )
 
     return QueryShape(
