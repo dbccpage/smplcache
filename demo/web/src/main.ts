@@ -929,8 +929,8 @@ ${escapeHtml(run?.claim_hygiene.next_test_needed ?? "")}
           <a href="https://github.com/dbccpage/smplcache/blob/main/docs/mvp_smplcache_anomalon.md" target="_blank" rel="noopener noreferrer">MVP specification</a>
           <a href="/api/scenarios" target="_blank" rel="noopener noreferrer">/api/scenarios</a>
           <a href="/healthz" target="_blank" rel="noopener noreferrer">/healthz</a>
-          <a href="https://www.anomalon.com/about">About</a>
-          <a href="https://www.anomalon.com/contact">Contact</a>
+          <a href="https://www.anomalon.com/">About</a>
+          <a href="mailto:ooutwire@pm.me">Contact</a>
         </div>
       </footer>
     </div>
