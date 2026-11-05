@@ -1,3 +1,14 @@
+import {
+  buildBoundaryChangeSql,
+  buildScreenUrlSearch,
+  decisionKindToMove,
+  formatCentsUsd,
+  formatFixInPlaceArithmetic,
+  formatPlainTextRecord,
+  parseScreenUrlState,
+  syncScreenUrlState,
+  type ReplayRecordInput,
+} from "./moves";
 import type {
   BoundaryTrace,
   CumulativeCounters,
@@ -20,6 +31,7 @@ interface AppState {
   loading: boolean;
   error: string | null;
   copiedReplayNotice: boolean;
+  copiedRecordNotice: boolean;
 }
 
 const state: AppState = {
@@ -35,6 +47,7 @@ const state: AppState = {
   loading: true,
   error: null,
   copiedReplayNotice: false,
+  copiedRecordNotice: false,
 };
 
 let playbackTimer: number | null = null;
@@ -44,11 +57,7 @@ function formatCents(cents: number | null | undefined): string {
   if (cents === null || cents === undefined) {
     return "Withheld (Stale)";
   }
-  const sign = cents < 0 ? "-" : "";
-  const abs = Math.abs(Math.trunc(cents));
-  const dollars = Math.floor(abs / 100);
-  const rem = abs % 100;
-  return `${sign}$${dollars.toLocaleString("en-US")}.${rem.toString().padStart(2, "0")}`;
+  return formatCentsUsd(cents);
 }
 
 function escapeHtml(raw: unknown): string {
@@ -62,50 +71,28 @@ function escapeHtml(raw: unknown): string {
 }
 
 function parseUrlParams(): void {
-  const params = new URLSearchParams(window.location.search);
-  const scen = params.get("scenario");
-  if (
-    scen === "live_revenue" ||
-    scen === "customers_and_regions" ||
-    scen === "missing_evidence"
-  ) {
-    state.scenarioId = scen;
-  }
-  const seedRaw = Number(params.get("seed"));
-  if (Number.isInteger(seedRaw) && seedRaw >= 1 && seedRaw <= 999999) {
-    state.seed = seedRaw;
-  }
-  const sizeRaw = Number(params.get("size"));
-  if ([100, 500, 1000, 2500].includes(sizeRaw)) {
-    state.datasetSize = sizeRaw;
-  }
-  const capParam = params.get("cap");
-  if (capParam !== null && capParam !== "" && capParam !== "none") {
-    const capNum = Number(capParam);
-    if ([60, 120, 250, 500, 1500, 3000].includes(capNum)) {
-      state.auxMaxTotalRows = capNum;
-    }
-  }
-  const stepParam = params.get("step");
-  if (stepParam !== null) {
-    const stepNum = Number(stepParam);
-    if (Number.isInteger(stepNum) && stepNum >= 0 && stepNum <= 10) {
-      state.currentStepIndex = stepNum;
-    }
-  }
+  const parsed = parseScreenUrlState(window.location.search, {
+    scenario: "live_revenue",
+    seed: 42,
+    size: 1000,
+    step: 1,
+    maxStep: 10,
+  });
+  state.scenarioId = parsed.scenario;
+  state.seed = parsed.seed;
+  state.datasetSize = parsed.size;
+  state.currentStepIndex = parsed.step;
+  state.auxMaxTotalRows = parsed.cap;
 }
 
 function syncUrlParams(): void {
-  const params = new URLSearchParams();
-  params.set("scenario", state.scenarioId);
-  params.set("seed", String(state.seed));
-  params.set("size", String(state.datasetSize));
-  if (state.scenarioId === "customers_and_regions" && state.auxMaxTotalRows !== null) {
-    params.set("cap", String(state.auxMaxTotalRows));
-  }
-  params.set("step", String(state.currentStepIndex));
-  const newUrl = `${window.location.pathname}?${params.toString()}`;
-  window.history.replaceState({}, "", newUrl);
+  syncScreenUrlState({
+    scenario: state.scenarioId,
+    seed: state.seed,
+    size: state.datasetSize,
+    step: state.currentStepIndex,
+    cap: state.auxMaxTotalRows,
+  });
 }
 
 function stopPlayback(): void {
@@ -250,18 +237,75 @@ function renderDecisionBadge(boundary: BoundaryTrace | null): string {
   if (!boundary) {
     return `<span class="decision-badge badge-preserve">● Initial Seeded Snapshot</span>`;
   }
-  switch (boundary.ui_badge) {
-    case "Preserve":
-      return `<span class="decision-badge badge-preserve">✓ Preserve (${escapeHtml(boundary.reason_code)})</span>`;
-    case "Repair":
-      return `<span class="decision-badge badge-repair">⚡ Repair (${escapeHtml(boundary.reason_code)})</span>`;
-    case "Invalidate / Recompute":
-      return `<span class="decision-badge badge-invalidate">↻ Invalidate / Recompute (${escapeHtml(boundary.reason_code)})</span>`;
-    case "Unsupported":
-      return `<span class="decision-badge badge-unsupported">⊘ Unsupported (${escapeHtml(boundary.reason_code)})</span>`;
-    case "Mismatch":
-      return `<span class="decision-badge badge-mismatch">✕ Mismatch Detected</span>`;
+  if (boundary.ui_badge === "Mismatch") {
+    return `<span class="decision-badge badge-mismatch">✕ Mismatch Detected</span>`;
   }
+  const move = decisionKindToMove(boundary.decision_kind);
+  if (move === "KEEP") {
+    return `<span class="decision-badge badge-preserve">✓ KEEP (${escapeHtml(boundary.reason_code)})</span>`;
+  }
+  if (move === "FIX IN PLACE") {
+    return `<span class="decision-badge badge-repair">⚡ FIX IN PLACE (${escapeHtml(boundary.reason_code)})</span>`;
+  }
+  return `<span class="decision-badge badge-invalidate">↻ REREAD (${escapeHtml(boundary.reason_code)})</span>`;
+}
+
+function getPreviousTotals(): Record<string, number> | null {
+  if (!state.run) return null;
+  if (state.currentStepIndex <= 1) {
+    return state.run.initial_state.oracle_result_cents;
+  }
+  const prev = state.run.boundaries[state.currentStepIndex - 2];
+  return prev ? prev.oracle_result_cents : state.run.initial_state.oracle_result_cents;
+}
+
+function getActiveArithmetic(boundary: BoundaryTrace | null): string | undefined {
+  if (!boundary || decisionKindToMove(boundary.decision_kind) !== "FIX IN PLACE") {
+    return undefined;
+  }
+  const beforeTotals = getPreviousTotals();
+  const afterTotals = boundary.smplcache_result_cents ?? boundary.oracle_result_cents;
+  if (!beforeTotals || !afterTotals) return undefined;
+  return formatFixInPlaceArithmetic({
+    beforeTotals,
+    afterTotals,
+    beforeImage: boundary.before_image,
+    afterImage: boundary.after_image,
+  });
+}
+
+function getActiveRecordText(): string {
+  const boundary = getActiveBoundary();
+  const beforeTotals = getPreviousTotals();
+  const afterTotals = boundary
+    ? boundary.smplcache_result_cents ?? boundary.oracle_result_cents
+    : state.run?.initial_state.smplcache_result_cents ?? null;
+  const move = boundary ? decisionKindToMove(boundary.decision_kind) : "INITIAL";
+  const arith = getActiveArithmetic(boundary);
+  const input: ReplayRecordInput = {
+    scenario: state.scenarioId,
+    seed: state.seed,
+    size: state.datasetSize,
+    step: state.currentStepIndex,
+    changeSql: buildBoundaryChangeSql(boundary),
+    move,
+    reasonCode: boundary ? boundary.reason_code : "initial_snapshot",
+    arithmeticSummary: arith,
+    beforeTotals,
+    afterTotals,
+  };
+  return formatPlainTextRecord(input);
+}
+
+function copyCurrentRecord(): void {
+  const text = getActiveRecordText();
+  navigator.clipboard?.writeText(text).catch(() => {});
+  state.copiedRecordNotice = true;
+  renderApp();
+  window.setTimeout(() => {
+    state.copiedRecordNotice = false;
+    renderApp();
+  }, 2200);
 }
 
 function renderGroupBars(
@@ -430,12 +474,23 @@ function renderApp(): void {
       ? `3-table join rebuilds read 3 source tables vs. 1 baseline query`
       : `Baseline: ${counters.baseline_source_queries} vs. SmplCache: ${counters.smplcache_source_queries}`;
 
+  const overviewHref = `/${buildScreenUrlSearch({
+    scenario: state.scenarioId,
+    seed: state.seed,
+    size: state.datasetSize,
+    step: state.currentStepIndex,
+    cap: state.auxMaxTotalRows,
+  })}`;
+  const activeArithmetic = getActiveArithmetic(boundary);
+  const activeRecordText = getActiveRecordText();
+  const activeMove = boundary ? decisionKindToMove(boundary.decision_kind) : null;
+
   root.innerHTML = `
     <header class="an-header">
       <div class="an-header__in">
         <a class="an-brand" href="https://anomalon.com/"><svg viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 15.5 11 6l5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="11" cy="12.6" r="1.7" fill="var(--an-accent)"/></svg>Anomalon <span class="an-brand__tool">/ SmplCache Live</span></a>
         <nav class="an-nav an-nav--inline" aria-label="Site">
-          <a href="/">Overview</a>
+          <a href="${escapeHtml(overviewHref)}">Overview</a>
           <a href="https://github.com/dbccpage/smplcache" target="_blank" rel="noopener noreferrer">Source</a>
           <a href="https://anomalon.com/">All tools</a>
         </nav>
@@ -447,8 +502,8 @@ function renderApp(): void {
         <div class="hero-copy">
           <h1 id="hero-heading">Change the data. Keep the answer correct.</h1>
           <p>
-            SmplCache preserves or repairs supported SQL results when the evidence is sufficient,
-            and recomputes when it is not. Watch every decision checked against a native SQLite database.
+            SmplCache makes one of three moves per change — <strong>KEEP</strong>, <strong>FIX IN PLACE</strong>, or <strong>REREAD</strong> —
+            and checks every result against a native SQLite database.
           </p>
         </div>
         <div class="hero-actions">
@@ -460,6 +515,9 @@ function renderApp(): void {
           </button>
           <button id="btn-remove-evidence" class="btn btn-warning" type="button">
             Remove required evidence
+          </button>
+          <button id="btn-copy-record" class="btn btn-sm" type="button" data-record="${escapeHtml(activeRecordText)}">
+            ${state.copiedRecordNotice ? "✓ Record Copied" : "Copy record"}
           </button>
           <button id="btn-inspect-sql" class="btn btn-sm" type="button">
             Inspect the SQL
@@ -491,7 +549,7 @@ function renderApp(): void {
         <div class="strip-card">
           <span class="strip-label">Full Recomputations Avoided</span>
           <div class="strip-value">${counters.full_result_recomputations_avoided}${escapeHtml(recompPct)}</div>
-          <div class="strip-sub">Baseline: ${counters.baseline_recomputations} full runs · SmplCache: ${counters.smplcache_rebuilds} rebuilds</div>
+          <div class="strip-sub">Baseline: ${counters.baseline_recomputations} full runs · SmplCache: ${counters.smplcache_rebuilds} rereads</div>
         </div>
         <div class="strip-card">
           <span class="strip-label">Source Table Queries Avoided</span>
@@ -499,16 +557,16 @@ function renderApp(): void {
           <div class="strip-sub">${escapeHtml(srcAvoidedNote)}</div>
         </div>
         <div class="strip-card">
-          <span class="strip-label">SmplCache Decisions</span>
+          <span class="strip-label">SmplCache Moves</span>
           <div class="strip-value">
-            ${counters.preserve_count}P · ${counters.repair_count}R · ${counters.invalidate_count}I
+            ${counters.preserve_count} KEEP · ${counters.repair_count} FIX IN PLACE · ${counters.invalidate_count} REREAD
           </div>
-          <div class="strip-sub">Preserve / Repair / Invalidate</div>
+          <div class="strip-sub">Changed col not in query / Add difference / Read again</div>
         </div>
         <div class="strip-card">
           <span class="strip-label">Step Progress</span>
           <div class="strip-value">
-            Boundary ${state.currentStepIndex} of ${maxSteps}
+            Step ${state.currentStepIndex} of ${maxSteps}
           </div>
           <div class="strip-sub">${escapeHtml(run?.config.dataset_size ?? 1000)} seeded orders (seed ${escapeHtml(state.seed)})</div>
         </div>
@@ -560,8 +618,8 @@ function renderApp(): void {
             ${
               state.scenarioId === "customers_and_regions"
                 ? `<label>
-                    Aux Row Limit:
-                    <select id="select-aux-cap" aria-label="Auxiliary resident row limit">
+                    Lookup Row Limit:
+                    <select id="select-aux-cap" aria-label="Cached join lookup row limit">
                       <option value="none" ${state.auxMaxTotalRows === null ? "selected" : ""}>Unbounded (All rows)</option>
                       <option value="1500" ${state.auxMaxTotalRows === 1500 ? "selected" : ""}>1,500 rows (Fits 1k)</option>
                       <option value="250" ${state.auxMaxTotalRows === 250 ? "selected" : ""}>250 rows (Tight)</option>
@@ -582,7 +640,7 @@ function renderApp(): void {
             .map(
               (b) => `
               <button type="button" class="step-pill ${state.currentStepIndex === b.boundary_index ? "active" : ""}" data-step="${b.boundary_index}">
-                ${b.step_number}. ${escapeHtml(b.action_label)} (${escapeHtml(b.ui_badge)})
+                ${b.step_number}. ${escapeHtml(b.action_label)} (${escapeHtml(decisionKindToMove(b.decision_kind))})
               </button>
             `
             )
@@ -599,7 +657,7 @@ function renderApp(): void {
               ${
                 boundary
                   ? `Step ${boundary.step_number} of ${maxSteps}: ${escapeHtml(boundary.title)}`
-                  : `Boundary 0: Initial Seeded Database Snapshot`
+                  : `Step 0: Initial Seeded Database Snapshot`
               }
             </h2>
             ${renderDecisionBadge(boundary)}
@@ -613,11 +671,24 @@ function renderApp(): void {
             </div>
 
             <div class="event-reason-box">
-              <strong>Decision Reason:</strong>
-              ${escapeHtml(
+              <strong>Move &amp; Reason${boundary ? ` (<code>${escapeHtml(boundary.reason_code)}</code>)` : ""}:</strong>
+              ${
+                activeMove &&
+                boundary &&
+                !boundary.plain_language_reason.startsWith(activeMove)
+                  ? `<strong style="margin-right:0.35rem;">${escapeHtml(activeMove)}</strong> — `
+                  : ""
+              }${escapeHtml(
                 boundary?.plain_language_reason ??
                   "Both Baseline and SmplCache are seeded from the same initial SQLite snapshot. Zero post-initialization queries have run yet."
               )}
+              ${
+                activeArithmetic
+                  ? `<div style="margin-top:0.35rem; font-family:var(--font-mono); font-size:0.8rem; color:var(--text-bright);">
+                      <strong>Arithmetic:</strong> ${escapeHtml(activeArithmetic)}
+                    </div>`
+                  : ""
+              }
               <div style="margin-top:0.3rem; font-size:0.82rem; color:var(--text-muted);">
                 ${escapeHtml(boundary?.narration ?? "")}
               </div>
@@ -750,7 +821,7 @@ function renderApp(): void {
               auxInfo
                 ? `<div class="event-banner" style="margin-bottom:0;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
-                      <strong style="font-size:0.82rem;">JoinAuxState Resident Row Telemetry</strong>
+                      <strong style="font-size:0.82rem;">Cached Join Lookup Rows</strong>
                       <span class="commit-tag">
                         ${auxInfo.resident_aux_rows} / ${auxInfo.aux_max_total_rows ?? "∞"} rows
                       </span>
@@ -765,7 +836,7 @@ function renderApp(): void {
                       }
                     </div>
                     <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.3rem;">
-                      Note: Limit counts resident auxiliary rows in JoinAuxState. Indexes, eviction tombstones,
+                      Note: Limit counts resident lookup rows kept in memory for joins. Indexes, eviction tombstones,
                       frequency counters, and output groups also consume memory; row capacity is not a total RAM limit.
                     </div>
                   </div>`
@@ -805,7 +876,7 @@ function renderApp(): void {
                   <pre class="code-block">${escapeHtml(
                     JSON.stringify(
                       boundary?.certificate ?? {
-                        note: "Boundary 0 (Initial Seed). Step forward to inspect per-event certificates.",
+                        note: "Step 0 (Initial Seed). Step forward to inspect per-event certificates.",
                       },
                       null,
                       2
@@ -850,7 +921,7 @@ function renderApp(): void {
                   Fail-Closed SQL AST Allowlist: Live Rejection Examples (via <code>parse_sql</code> / <code>parse_join_sql</code>)
                 </h3>
                 <p style="font-size:0.82rem; color:var(--text-secondary); margin:0.2rem 0 0.5rem;">
-                  SmplCache never guesses on SQL constructs outside its verified single-block SPJA fragment.
+                  SmplCache never guesses on SQL constructs outside its supported single-block SELECT-FROM-JOIN-WHERE-GROUP BY subset.
                   The queries below are evaluated through the real parser on the server:
                 </p>
                 <div class="rejected-list">
@@ -880,16 +951,16 @@ function renderApp(): void {
                   <h3 class="panel-title" style="margin-bottom:0.45rem;">How SmplCache Evaluates Every Committed Write</h3>
                   <div class="code-block" style="line-height:1.65;">
 1. <strong>Parse SQL Shape (AST Allowlist)</strong>
-   Decompose admitted SELECT..FROM..[JOIN]..WHERE..GROUP BY into dependency fingerprint &amp; required CDC evidence columns.
-2. <strong>Boundary Intersection Check</strong>
-   If modified columns are disjoint from the shape fingerprint (e.g. <code>orders.notes</code>), emit <strong>Preserve</strong> (0 DB queries).
+   Decompose admitted SELECT..FROM..[JOIN]..WHERE..GROUP BY into dependency set &amp; required log columns.
+2. <strong>Dependency Intersection Check</strong>
+   If modified columns are outside the query dependency set (e.g. <code>orders.notes</code>), emit <strong>KEEP</strong> (0 DB queries).
 3. <strong>Evidence Completeness Check</strong>
-   Verify required columns are present in both <code>old</code> and <code>new</code> row images (and foreign-key keys are resident in <code>JoinAuxState</code>).
-4. <strong>In-Place Delta Repair or Fail-Closed Rebuild</strong>
-   • Sufficient evidence → <strong>Repair</strong> group sum &amp; count in place (0 DB queries).
-   • Missing/evicted evidence → <strong>Invalidate</strong>, withhold stale cache, and rebuild from the committed source snapshot.
+   Verify required columns are present in both <code>old</code> and <code>new</code> row images (and foreign-key lookup rows are resident in memory).
+4. <strong>In-Place Delta Repair or Fail-Closed Reread</strong>
+   • Sufficient evidence → <strong>FIX IN PLACE</strong> by adding the difference to group sum &amp; count (0 DB queries).
+   • Missing/evicted evidence → <strong>REREAD</strong>, withhold stale cache, and reread from the committed source snapshot.
 5. <strong>Independent Native SQLite Verification</strong>
-   Every boundary in this demo is checked against native SQLite integer <code>SUM(amount_cents)</code>.
+   Every step in this demo is checked against native SQLite integer <code>SUM(amount_cents)</code>.
                   </div>
                 </div>
                 <div>
@@ -989,6 +1060,10 @@ function bindEvents(): void {
     ?.addEventListener("click", () => {
       jumpToRemoveEvidence();
     });
+
+  document.getElementById("btn-copy-record")?.addEventListener("click", () => {
+    copyCurrentRecord();
+  });
 
   document.getElementById("btn-inspect-sql")?.addEventListener("click", () => {
     state.inspectorTab = "sql";

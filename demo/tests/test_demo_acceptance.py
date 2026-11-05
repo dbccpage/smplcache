@@ -471,3 +471,61 @@ def test_one_way_dependency_boundary_core_never_imports_demo_or_web() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 root_pkg = node.module.split(".")[0]
                 assert root_pkg not in forbidden, f"{py_file.name} imports {root_pkg}"
+
+
+def test_front_page_prerendered_rows_and_no_change_yet_before_js() -> None:
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Keep Source link and demo-only note
+    assert "https://github.com/dbccpage/smplcache" in html
+    assert "demo only, not a benchmark" in html
+    assert "prefers-color-scheme" not in html
+
+    # Pre-rendered rows in #orders, #customers, and #rows before JS runs
+    assert "Leave at front desk" in html
+    assert "Annual renewal invoice" in html
+    assert "Acme Industrial" in html
+    assert "$27,092.00" in html
+    assert "$21,602.00" in html
+    assert "$16,412.00" in html
+    assert "$13,037.00" in html
+
+    # Show "no change yet" instead of zeros in the three Queries cells before first click
+    assert 'id="redis"' in html and "no change yet" in html
+    assert '<td class="q" id="redis">0</td>' not in html
+    assert '<td class="q" id="mv">0</td>' not in html
+    assert '<td class="q" id="ours">0</td>' not in html
+
+    # Copy record button is present on the front page
+    assert "Copy record" in html
+
+
+def test_shared_moves_module_and_copy_record_and_url_roundtrip_contracts() -> None:
+    web_src = Path(__file__).resolve().parent.parent / "web" / "src"
+    moves_ts = web_src / "moves.ts"
+    onepane_ts = web_src / "onepane.ts"
+    main_ts = web_src / "main.ts"
+
+    assert moves_ts.exists(), "Shared moves.ts module must exist"
+    assert onepane_ts.exists(), "Front-page onepane.ts module must exist"
+
+    moves_text = moves_ts.read_text(encoding="utf-8")
+    onepane_text = onepane_ts.read_text(encoding="utf-8")
+    main_text = main_ts.read_text(encoding="utf-8")
+
+    # Both / and /lab/ import the shared three-move module
+    assert 'from "./moves"' in onepane_text
+    assert 'from "./moves"' in main_text
+
+    # Shared module extracts query dependency set and formats arithmetic & plain-text record
+    assert "extractQueryDependencies" in moves_text
+    assert "classifyChangeMove" in moves_text
+    assert "formatFixInPlaceArithmetic" in moves_text
+    assert "formatPlainTextRecord" in moves_text
+    assert "parseScreenUrlState" in moves_text
+
+    # /lab/ uses plain labels KEEP, FIX IN PLACE, REREAD and has Copy record
+    assert "FIX IN PLACE" in main_text or "decisionKindToMove" in main_text
+    assert "Copy record" in main_text
