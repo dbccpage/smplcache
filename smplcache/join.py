@@ -1971,6 +1971,13 @@ def process_join_event(
 
     if decision.kind == DecisionKind.PRESERVE:
         pk_col = aux_state.pk_col_for(event_rel)
+        if decision.reason == "disjoint_columns":
+            if op == "UPDATE" and (pk_col in old_map or pk_col in new_map):
+                old_pk = _normalize_group_atom(old_map.get(pk_col, new_map.get(pk_col)))
+                rel_store = aux_state.table_rows.get(event_rel, {})
+                if old_pk in rel_store:
+                    rel_store[old_pk].update(new_map)
+            return decision
         if (
             (op == "INSERT" and pk_col in new_map)
             or (op == "DELETE" and pk_col in old_map)
