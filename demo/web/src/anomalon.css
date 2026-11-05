@@ -35,15 +35,9 @@
   --an-radius: 6px;
   --an-header-h: 56px;
   --an-w-prose: 620px; --an-w-home: 880px; --an-w-tool: 1200px;
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --an-bg: #11161c; --an-surface: #171e26; --an-ink: #e6eaee; --an-ink-2: #aab3bd; --an-ink-3: #8a939d;
-    --an-line: #2a333d; --an-line-strong: #3a4552; --an-accent: #4fb7b0; --an-accent-hover: #6cc9c2; --an-accent-ink: #0c1a1a;
-    --an-accent-soft: #16302f; --an-ok: #6fcf97; --an-ok-soft: #173326; --an-warn: #e0b55a; --an-warn-soft: #3a2e14;
-    --an-bad: #f2867d; --an-bad-soft: #3d1d1a; --an-mute-soft: #222a33; color-scheme: dark;
-  }
-}
+/* Light by default on every site, whatever the OS setting. Dark only when a page sets data-theme="dark". */
 :root[data-theme="dark"] {
   --an-bg: #11161c; --an-surface: #171e26; --an-ink: #e6eaee; --an-ink-2: #aab3bd; --an-ink-3: #8a939d;
   --an-line: #2a333d; --an-line-strong: #3a4552; --an-accent: #4fb7b0; --an-accent-hover: #6cc9c2; --an-accent-ink: #0c1a1a;
