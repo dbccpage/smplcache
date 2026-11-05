@@ -243,11 +243,11 @@ def create_app(
         if resolved_dist.is_dir():
             if full_path:
                 candidate = (resolved_dist / full_path).resolve()
-                if (
-                    candidate.is_relative_to(resolved_dist.resolve())
-                    and candidate.is_file()
-                ):
-                    return FileResponse(str(candidate))
+                if candidate.is_relative_to(resolved_dist.resolve()):
+                    if candidate.is_file():
+                        return FileResponse(str(candidate))
+                    if (candidate / "index.html").is_file():
+                        return FileResponse(str(candidate / "index.html"))
             index_file = resolved_dist / "index.html"
             if index_file.is_file():
                 return FileResponse(str(index_file))
