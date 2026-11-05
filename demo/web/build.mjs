@@ -53,7 +53,20 @@ const prodHtml = rawHtml
     `<script type="module" src="/assets/${jsFilename}"></script>`
   );
 
-fs.writeFileSync(path.join(distDir, "index.html"), prodHtml, "utf-8");
+// The full walkthrough lives at /lab/; the front page is the one-pane overview.
+fs.mkdirSync(path.join(distDir, "lab"), { recursive: true });
+fs.writeFileSync(path.join(distDir, "lab", "index.html"), prodHtml, "utf-8");
+
+// 4. Front page: the one-pane overview, styled by the shared Anomalon stylesheet only.
+const sharedCss = fs.readFileSync(sharedCssPath, "utf-8").replace(/\r\n/g, "\n");
+const sharedHash = crypto.createHash("sha256").update(sharedCss).digest("hex").slice(0, 10);
+const sharedFilename = `anomalon-${sharedHash}.css`;
+fs.writeFileSync(path.join(assetsDir, sharedFilename), sharedCss, "utf-8");
+const onePane = fs
+  .readFileSync(path.join(__dirname, "src", "onepane.html"), "utf-8")
+  .replace(/\r\n/g, "\n")
+  .replace("<!-- ANOMALON_CSS -->", `<link rel="stylesheet" href="/assets/${sharedFilename}" />`);
+fs.writeFileSync(path.join(distDir, "index.html"), onePane, "utf-8");
 fs.rmSync(tmpOutDir, { recursive: true, force: true });
 
-console.log(`Built demo/web/dist: /assets/${jsFilename}, /assets/${cssFilename}`);
+console.log(`Built demo/web/dist: /assets/${jsFilename}, /assets/${cssFilename}, /assets/${sharedFilename}`);

@@ -419,8 +419,14 @@ def test_spa_root_and_static_assets_served() -> None:
     r_root = client.get("/")
     assert r_root.status_code == 200
     assert "SmplCache Live" in r_root.text
-    assert "/assets/app-" in r_root.text
-    assert "/assets/styles-" in r_root.text
+    assert "/assets/anomalon-" in r_root.text
+    assert 'href="/lab/"' in r_root.text
+
+    for path in ("/lab/", "/lab"):
+        r_lab = client.get(path)
+        assert r_lab.status_code == 200
+        assert "/assets/app-" in r_lab.text
+        assert "/assets/styles-" in r_lab.text
 
 
 def test_ambiguous_unqualified_binding_invalidates_rather_than_guessing() -> None:
