@@ -1,7 +1,7 @@
 /*
  * Anomalon design system v1 — palette A, "paper and teal".
- * One stylesheet for www.anomalon.com and every *.anomalon.com tool.
- * Load:  <link rel="stylesheet" href="https://www.anomalon.com/ds/v1/anomalon.css">
+ * One stylesheet for anomalon.com and every *.anomalon.com tool.
+ * Load:  <link rel="stylesheet" href="https://anomalon.com/ds/v1/anomalon.css">
  * Classes are prefixed an- so they never collide with a tool's own CSS.
  */
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
@@ -75,6 +75,10 @@ body.an { margin: 0; background: var(--an-bg); color: var(--an-ink); font: 400 v
 .an-brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; letter-spacing: -.01em; color: var(--an-ink) !important; text-decoration: none; white-space: nowrap; }
 .an-brand svg { width: 22px; height: 22px; flex: none; }
 .an-brand__tool { color: var(--an-ink-3); font-weight: 400; }
+/* very narrow phones: the tool name truncates instead of pushing the menu off-screen */
+.an-brand { min-width: 0; }
+.an-brand__tool { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.an-header .an-nav__toggle { flex: none; }
 .an-nav { margin-left: auto; display: flex; gap: var(--an-s5); font-size: 13.5px; }
 .an-nav a { color: var(--an-ink-2); text-decoration: none; padding: 17px 0; }
 .an-nav a:hover { color: var(--an-ink); }
@@ -176,6 +180,54 @@ body.an { margin: 0; background: var(--an-bg); color: var(--an-ink); font: 400 v
 .an-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) { .an *, .an *::before, .an *::after { transition: none !important; animation: none !important; } }
+
+/* ---------- section heading on the home page ---------- */
+.an-section { margin-top: var(--an-s7); display: grid; gap: var(--an-s2); }
+.an-section > h2 { font-size: var(--an-fs-md); }
+.an-section > p { color: var(--an-ink-2); max-width: 60ch; }
+.an-section .an-tools { margin-top: var(--an-s3); }
+.an-tool--placeholder { color: var(--an-ink-2) !important; }
+.an-tool--placeholder .an-tool__name::after { content: none; }
+.an-tool__name .an-chip { margin-left: auto; align-self: flex-start; flex: none; }
+
+/* ---------- docs layout: left-hand nav + content ---------- */
+.an-docs { max-width: var(--an-w-tool); margin: 0 auto; display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: var(--an-s6); align-items: start;
+  padding-block: var(--an-s6) var(--an-s6); padding-left: max(var(--an-s5), env(safe-area-inset-left, 0px)); padding-right: max(var(--an-s5), env(safe-area-inset-right, 0px)); }
+.an-lhnav { position: sticky; top: calc(var(--an-header-h) + var(--an-s5) + env(safe-area-inset-top, 0px)); max-height: calc(100vh - var(--an-header-h) - var(--an-s6)); overflow-y: auto; font-size: 13.5px; }
+.an-lhnav > summary { display: none; }
+.an-lhnav ol, .an-lhnav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.an-lhnav ol ol, .an-lhnav ul ul { margin: 2px 0 4px 12px; padding-left: 10px; border-left: 1px solid var(--an-line); }
+.an-lhnav a { display: block; padding: 5px 10px; border-radius: 4px; color: var(--an-ink-2); text-decoration: none; line-height: 1.35; }
+.an-lhnav a:hover { background: var(--an-mute-soft); color: var(--an-ink); }
+.an-lhnav a[aria-current="true"] { background: var(--an-accent-soft); color: var(--an-ink); box-shadow: inset 2px 0 0 var(--an-accent); }
+.an-lhnav__title { padding: 0 10px 8px; }
+.an-docs__main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--an-s6); min-width: 0; }
+.an-docs__main > header { display: grid; gap: var(--an-s2); }
+.an-docs__main > header p { color: var(--an-ink-2); max-width: 65ch; }
+.an-topic { scroll-margin-top: calc(var(--an-header-h) + var(--an-s4)); display: grid; gap: var(--an-s2); padding-top: var(--an-s5); border-top: 1px solid var(--an-line); }
+.an-topic .an-topic { margin-left: var(--an-s5); padding-top: var(--an-s4); }
+.an-topic h2 { font-size: var(--an-fs-lg); display: flex; flex-wrap: wrap; align-items: center; gap: var(--an-s3); }
+.an-topic h3 { font-size: var(--an-fs-md); display: flex; flex-wrap: wrap; align-items: center; gap: var(--an-s3); }
+/* nested contents toggles (e.g. "Subtopics (5)") and deep topic levels */
+.an-lhnav details:not(.an-lhnav) > summary { display: list-item; padding: 2px 10px 4px 22px; font-size: 12.5px; color: var(--an-ink-3); cursor: pointer; }
+.an-lhnav details:not(.an-lhnav) > summary:hover { color: var(--an-accent); }
+.an-lhnav details:not(.an-lhnav) > ol { margin-left: 12px; }
+.an-topic .an-topic .an-topic { border-top: 0; padding-top: var(--an-s1); gap: var(--an-s1); }
+.an-topic h4, .an-topic h5, .an-topic h6 { margin: 0; }
+.an-topic h4 { font-size: 15px; font-weight: 600; padding-top: var(--an-s2); }
+.an-topic--leaf { border-top: 0; padding-top: 0; }
+.an-topic--leaf > :is(h3, h4, h5, h6) { font-size: 14px; font-weight: 400; color: var(--an-ink-2); padding-top: 2px; }
+.an-topic--leaf > :is(h3, h4, h5, h6)::before { content: "\2013\00a0"; color: var(--an-ink-3); }
+.an-topic:focus { outline: 2px solid var(--an-accent); outline-offset: 4px; border-radius: 2px; }
+.an-placeholder { border: 1px dashed var(--an-line-strong); border-radius: var(--an-radius); padding: 14px 16px; color: var(--an-ink-3); font-size: 13.5px; background: var(--an-surface); }
+@media (max-width: 860px) {
+  .an-docs { grid-template-columns: minmax(0, 1fr); gap: var(--an-s5); padding-left: max(var(--an-s4), env(safe-area-inset-left, 0px)); padding-right: max(var(--an-s4), env(safe-area-inset-right, 0px)); }
+  .an-lhnav { position: static; max-height: none; border: 1px solid var(--an-line); border-radius: var(--an-radius); background: var(--an-surface); }
+  .an-lhnav > summary { display: flex; justify-content: space-between; padding: 10px 12px; cursor: pointer; font-weight: 500; color: var(--an-ink); }
+  .an-lhnav__body { padding: 0 6px 8px; }
+  .an-lhnav__title { display: none; }
+  .an-topic .an-topic { margin-left: var(--an-s3); }
+}
 
 /* SmplCache Live: local styles on top of anomalon.css (Anomalon design system v1, palette A).
    The local variable names are kept and aliased onto the shared tokens. */

@@ -433,10 +433,10 @@ function renderApp(): void {
   root.innerHTML = `
     <header class="an-header">
       <div class="an-header__in">
-        <a class="an-brand" href="https://www.anomalon.com/"><svg viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 15.5 11 6l5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="11" cy="12.6" r="1.7" fill="var(--an-accent)"/></svg>Anomalon <span class="an-brand__tool">/ SmplCache Live</span></a>
+        <a class="an-brand" href="https://anomalon.com/"><svg viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="1" width="20" height="20" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 15.5 11 6l5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="11" cy="12.6" r="1.7" fill="var(--an-accent)"/></svg>Anomalon <span class="an-brand__tool">/ SmplCache Live</span></a>
         <nav class="an-nav an-nav--inline" aria-label="Site">
           <a href="https://github.com/dbccpage/smplcache" target="_blank" rel="noopener noreferrer">Source</a>
-          <a href="https://www.anomalon.com/">All tools</a>
+          <a href="https://anomalon.com/">All tools</a>
         </nav>
       </div>
     </header>
@@ -929,8 +929,8 @@ ${escapeHtml(run?.claim_hygiene.next_test_needed ?? "")}
           <a href="https://github.com/dbccpage/smplcache/blob/main/docs/mvp_smplcache_anomalon.md" target="_blank" rel="noopener noreferrer">MVP specification</a>
           <a href="/api/scenarios" target="_blank" rel="noopener noreferrer">/api/scenarios</a>
           <a href="/healthz" target="_blank" rel="noopener noreferrer">/healthz</a>
-          <a href="https://www.anomalon.com/">About</a>
-          <a href="mailto:ooutwire@pm.me">Contact</a>
+          <a href="https://anomalon.com/about/">About</a>
+          <a href="https://anomalon.com/contact/">Contact</a>
         </div>
       </footer>
     </div>
