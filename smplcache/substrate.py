@@ -13,6 +13,7 @@ without pulling raw base table scans into Python when only group statistics are 
 from __future__ import annotations
 
 from decimal import Decimal
+import importlib
 import re
 import sqlite3
 from typing import Any, Literal, Mapping, Sequence
@@ -29,12 +30,11 @@ from smplcache.smplcache import (
     process_event,
 )
 
+_duckdb_mod: Any = None
 try:
-    import duckdb as _duckdb_mod
-
+    _duckdb_mod = importlib.import_module("duckdb")
     HAS_DUCKDB = True
 except ImportError:
-    _duckdb_mod = None
     HAS_DUCKDB = False
 
 

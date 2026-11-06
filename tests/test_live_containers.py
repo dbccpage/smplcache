@@ -32,6 +32,7 @@ from smplcache import (
     SharedJoinAuxPool,
     WalStreamProcessor,
     WriteEvent,
+    adapt_wal_payload,
     encode_debezium_envelope,
     generate_sql_ddl,
     parse_join_sql,
@@ -143,14 +144,15 @@ def test_live_postgres16_3nf_lift_wal_and_cold_rebuild() -> None:
                 f"FROM {ord_table} o JOIN {cust_table} c ON o.customer_id = c.customer_id "
                 f"WHERE o.status = 'paid' GROUP BY c.region"
             )
-            jshape = parse_join_sql(join_sql).shape
+            pk_map = {ord_table: "order_id", cust_table: "customer_id"}
+            jshape = parse_join_sql(join_sql, primary_keys=pk_map).shape
             assert jshape is not None
 
             pool = SharedJoinAuxPool(
                 [jshape],
                 max_total_rows=50,
                 eviction_policy="wtinylfu",
-                pk_by_relation={ord_table: "order_id", cust_table: "customer_id"},
+                primary_keys=pk_map,
             )
             pool.rebuild(
                 {
@@ -185,44 +187,53 @@ def test_live_postgres16_3nf_lift_wal_and_cold_rebuild() -> None:
             cur.execute(
                 f"UPDATE {cust_table} SET tier = 'platinum' WHERE customer_id = 10;"
             )
-            wal_proc = WalStreamProcessor(source_format="debezium")
-            ev_tier = wal_proc.parse_and_adapt(
+            wal_proc = WalStreamProcessor(
+                shape=jshape,
+                aux_state=pool.aux_state,
+                numeric_cols=frozenset({"amount"}),
+            )
+            ev_tier = adapt_wal_payload(
                 encode_debezium_envelope(
-                    table=cust_table,
-                    op="u",
-                    before={"customer_id": 10, "region": "us", "tier": "gold"},
-                    after={"customer_id": 10, "region": "us", "tier": "platinum"},
-                    ts_ms=1001,
+                    WriteEvent(
+                        relation=cust_table,
+                        old={"customer_id": 10, "region": "us", "tier": "gold"},
+                        new={"customer_id": 10, "region": "us", "tier": "platinum"},
+                    ),
                     tx_id="501",
-                )
+                    lsn=1001,
+                ),
+                numeric_cols={"amount"},
             )
             assert ev_tier is not None
-            assert ev_tier.boundary_clock == "501"
+            assert ev_tier.boundary_clock == "1001"
             d_tier = pool.process_event(ev_tier)[jshape.name]
             assert d_tier.kind == DecisionKind.PRESERVE
-            assert d_tier.certificate.boundary_clock == "501"
+            assert d_tier.certificate.boundary_clock == "1001"
+            assert wal_proc.boundary_clock is None
 
             # 2. Repairable order amount update -> REPAIR
             cur.execute(f"UPDATE {ord_table} SET amount = 85.00 WHERE order_id = 2;")
-            ev_amt = wal_proc.parse_and_adapt(
+            ev_amt = adapt_wal_payload(
                 encode_debezium_envelope(
-                    table=ord_table,
-                    op="u",
-                    before={
-                        "order_id": 2,
-                        "customer_id": 10,
-                        "status": "paid",
-                        "amount": "50.00",
-                    },
-                    after={
-                        "order_id": 2,
-                        "customer_id": 10,
-                        "status": "paid",
-                        "amount": "85.00",
-                    },
-                    ts_ms=1002,
+                    WriteEvent(
+                        relation=ord_table,
+                        old={
+                            "order_id": 2,
+                            "customer_id": 10,
+                            "status": "paid",
+                            "amount": "50.00",
+                        },
+                        new={
+                            "order_id": 2,
+                            "customer_id": 10,
+                            "status": "paid",
+                            "amount": "85.00",
+                        },
+                    ),
                     tx_id="502",
-                )
+                    lsn=1002,
+                ),
+                numeric_cols={"amount"},
             )
             assert ev_amt is not None
             d_amt = pool.process_event(ev_amt)[jshape.name]
