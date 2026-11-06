@@ -50,7 +50,9 @@ ENGINE_VERSION = "tuner/1"
 
 def canonical_json(value: Any) -> str:
     """Deterministic JSON: sorted keys, no whitespace, ASCII only."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str
+    )
 
 
 def content_hash(value: Any) -> str:
@@ -162,7 +164,9 @@ class Receipt:
     hash: str
 
     @staticmethod
-    def compute_hash(seq: int, step: str, candidate_id: str, body: Mapping[str, Any], prev_hash: str) -> str:
+    def compute_hash(
+        seq: int, step: str, candidate_id: str, body: Mapping[str, Any], prev_hash: str
+    ) -> str:
         return content_hash(
             {
                 "seq": seq,
@@ -219,11 +223,20 @@ class ReceiptLog:
     def head(self) -> str:
         return self._receipts[-1].hash if self._receipts else GENESIS_HASH
 
-    def append(self, step: ReceiptStep, candidate_id: str, body: Mapping[str, Any]) -> Receipt:
+    def append(
+        self, step: ReceiptStep, candidate_id: str, body: Mapping[str, Any]
+    ) -> Receipt:
         seq = len(self._receipts)
         prev = self.head
         digest = Receipt.compute_hash(seq, step, candidate_id, body, prev)
-        receipt = Receipt(seq=seq, step=step, candidate_id=candidate_id, body=dict(body), prev_hash=prev, hash=digest)
+        receipt = Receipt(
+            seq=seq,
+            step=step,
+            candidate_id=candidate_id,
+            body=dict(body),
+            prev_hash=prev,
+            hash=digest,
+        )
         self._receipts.append(receipt)
         return receipt
 
@@ -233,7 +246,13 @@ class ReceiptLog:
         for index, receipt in enumerate(self._receipts):
             if receipt.seq != index or receipt.prev_hash != prev:
                 return index
-            expected = Receipt.compute_hash(receipt.seq, receipt.step, receipt.candidate_id, receipt.body, receipt.prev_hash)
+            expected = Receipt.compute_hash(
+                receipt.seq,
+                receipt.step,
+                receipt.candidate_id,
+                receipt.body,
+                receipt.prev_hash,
+            )
             if receipt.hash != expected:
                 return index
             prev = receipt.hash
@@ -242,7 +261,9 @@ class ReceiptLog:
     def require_intact(self) -> None:
         bad = self.verify()
         if bad >= 0:
-            raise ReceiptChainBroken(f"receipt {bad} does not match its content or predecessor")
+            raise ReceiptChainBroken(
+                f"receipt {bad} does not match its content or predecessor"
+            )
 
     def to_json(self) -> list[Json]:
         return [r.to_json() for r in self._receipts]
@@ -318,10 +339,14 @@ class Evaluator(Protocol):
 class Authorizer(Protocol):
     name: str
 
-    def authorize(self, candidate: Candidate, verdict: Verdict, policy: Policy) -> Authorization: ...
+    def authorize(
+        self, candidate: Candidate, verdict: Verdict, policy: Policy
+    ) -> Authorization: ...
 
 
-def propose(proposer: Proposer, context: Mapping[str, Any], memory: MistakeMemory | None = None) -> list[Candidate]:
+def propose(
+    proposer: Proposer, context: Mapping[str, Any], memory: MistakeMemory | None = None
+) -> list[Candidate]:
     """Ask ``proposer`` for candidates; stamp each with the proposer's name as origin.
 
     Candidates already in ``memory`` are left in the result (the loop records them
@@ -330,7 +355,12 @@ def propose(proposer: Proposer, context: Mapping[str, Any], memory: MistakeMemor
     out: list[Candidate] = []
     for cand in proposer.propose(context):
         if cand.origin != proposer.name:
-            cand = Candidate(kind=cand.kind, payload=cand.payload, origin=proposer.name, rationale=cand.rationale)
+            cand = Candidate(
+                kind=cand.kind,
+                payload=cand.payload,
+                origin=proposer.name,
+                rationale=cand.rationale,
+            )
         out.append(cand)
     return out
 
@@ -340,17 +370,28 @@ def evaluate(evaluator: Evaluator, candidate: Candidate, history: Any) -> Verdic
     if verdict.status not in ("supported", "refuted", "underdetermined"):
         raise TunerError(f"evaluator returned an unknown status: {verdict.status!r}")
     if verdict.evaluator != evaluator.name:
-        verdict = Verdict(status=verdict.status, evaluator=evaluator.name, reason=verdict.reason, evidence=verdict.evidence)
+        verdict = Verdict(
+            status=verdict.status,
+            evaluator=evaluator.name,
+            reason=verdict.reason,
+            evidence=verdict.evidence,
+        )
     return verdict
 
 
-def authorize(authorizer: Authorizer, candidate: Candidate, verdict: Verdict, policy: Policy) -> Authorization:
+def authorize(
+    authorizer: Authorizer, candidate: Candidate, verdict: Verdict, policy: Policy
+) -> Authorization:
     """Run the authorizer, then enforce the separation rules on its answer."""
     if authorizer.name == candidate.origin:
-        raise SelfAuthorization(f"{authorizer.name!r} may not authorize its own proposal")
+        raise SelfAuthorization(
+            f"{authorizer.name!r} may not authorize its own proposal"
+        )
     auth = authorizer.authorize(candidate, verdict, policy)
     if auth.authorizer == candidate.origin:
-        raise SelfAuthorization(f"authorization names the proposer {candidate.origin!r} as authorizer")
+        raise SelfAuthorization(
+            f"authorization names the proposer {candidate.origin!r} as authorizer"
+        )
     if auth.status == "approved" and verdict.status != "supported":
         return Authorization(
             status="denied",
@@ -361,12 +402,19 @@ def authorize(authorizer: Authorizer, candidate: Candidate, verdict: Verdict, po
     return auth
 
 
-def record(log: ReceiptLog, step: ReceiptStep, candidate: Candidate | str, body: Mapping[str, Any]) -> Receipt:
+def record(
+    log: ReceiptLog,
+    step: ReceiptStep,
+    candidate: Candidate | str,
+    body: Mapping[str, Any],
+) -> Receipt:
     candidate_id = candidate if isinstance(candidate, str) else candidate.candidate_id
     return log.append(step, candidate_id, body)
 
 
-def learn(receipts: Iterable[Receipt], memory: MistakeMemory | None = None) -> MistakeMemory:
+def learn(
+    receipts: Iterable[Receipt], memory: MistakeMemory | None = None
+) -> MistakeMemory:
     """Fold refuted verdicts from ``receipts`` into a mistake memory."""
     memory = memory if memory is not None else MistakeMemory()
     for receipt in receipts:
@@ -394,18 +442,45 @@ class PolicyAuthorizer:
     def __init__(self, name: str = "policy") -> None:
         self.name = name
 
-    def authorize(self, candidate: Candidate, verdict: Verdict, policy: Policy) -> Authorization:
+    def authorize(
+        self, candidate: Candidate, verdict: Verdict, policy: Policy
+    ) -> Authorization:
         if verdict.status == "refuted":
-            return Authorization("denied", self.name, "verdict refuted: " + verdict.reason, policy.policy_id)
+            return Authorization(
+                "denied",
+                self.name,
+                "verdict refuted: " + verdict.reason,
+                policy.policy_id,
+            )
         if verdict.status == "underdetermined":
-            return Authorization("needs_human", self.name, "verdict underdetermined: " + verdict.reason, policy.policy_id)
+            return Authorization(
+                "needs_human",
+                self.name,
+                "verdict underdetermined: " + verdict.reason,
+                policy.policy_id,
+            )
         if candidate.kind in policy.human_review_kinds:
-            return Authorization("needs_human", self.name, f"kind {candidate.kind!r} is reserved for human review", policy.policy_id)
+            return Authorization(
+                "needs_human",
+                self.name,
+                f"kind {candidate.kind!r} is reserved for human review",
+                policy.policy_id,
+            )
         if candidate.kind not in policy.auto_approve_kinds:
-            return Authorization("needs_human", self.name, f"kind {candidate.kind!r} has no auto-approve rule", policy.policy_id)
+            return Authorization(
+                "needs_human",
+                self.name,
+                f"kind {candidate.kind!r} has no auto-approve rule",
+                policy.policy_id,
+            )
         improvement = verdict.evidence.get(policy.improvement_key)
         if not isinstance(improvement, (int, float)):
-            return Authorization("needs_human", self.name, f"evidence lacks numeric {policy.improvement_key!r}", policy.policy_id)
+            return Authorization(
+                "needs_human",
+                self.name,
+                f"evidence lacks numeric {policy.improvement_key!r}",
+                policy.policy_id,
+            )
         if improvement < policy.min_improvement:
             return Authorization(
                 "denied",
@@ -413,7 +488,12 @@ class PolicyAuthorizer:
                 f"{policy.improvement_key}={improvement} below policy minimum {policy.min_improvement}",
                 policy.policy_id,
             )
-        return Authorization("approved", self.name, f"policy {policy.policy_id} auto-approves {candidate.kind}", policy.policy_id)
+        return Authorization(
+            "approved",
+            self.name,
+            f"policy {policy.policy_id} auto-approves {candidate.kind}",
+            policy.policy_id,
+        )
 
 
 @dataclass
@@ -430,7 +510,9 @@ class RunSummary:
     applied: int = 0
     apply_failed: int = 0
     applied_candidates: list[Candidate] = field(default_factory=list)
-    pending_human: list[tuple[Candidate, Verdict, Authorization]] = field(default_factory=list)
+    pending_human: list[tuple[Candidate, Verdict, Authorization]] = field(
+        default_factory=list
+    )
 
     @property
     def proposal_error_rate(self) -> float:
@@ -475,7 +557,9 @@ class Loop:
         for a, obj_a in roles.items():
             for b, obj_b in roles.items():
                 if a < b and (obj_a is obj_b or obj_a.name == obj_b.name):
-                    raise RoleConflict(f"{a} and {b} are the same component ({obj_a.name!r})")
+                    raise RoleConflict(
+                        f"{a} and {b} are the same component ({obj_a.name!r})"
+                    )
         self.proposer = proposer
         self.evaluator = evaluator
         self.authorizer = authorizer
@@ -501,25 +585,56 @@ class Loop:
                     self.log,
                     "skipped_known_mistake",
                     candidate,
-                    {"run": run_label, "candidate": candidate.to_json(), "prior_reason": known.reason, "prior_receipt_seq": known.receipt_seq},
+                    {
+                        "run": run_label,
+                        "candidate": candidate.to_json(),
+                        "prior_reason": known.reason,
+                        "prior_receipt_seq": known.receipt_seq,
+                    },
                 )
                 continue
-            record(self.log, "proposed", candidate, {"run": run_label, "candidate": candidate.to_json()})
+            record(
+                self.log,
+                "proposed",
+                candidate,
+                {"run": run_label, "candidate": candidate.to_json()},
+            )
             verdict = evaluate(self.evaluator, candidate, history)
             setattr(summary, verdict.status, getattr(summary, verdict.status) + 1)
             receipt = record(
-                self.log, "evaluated", candidate, {"run": run_label, "candidate": candidate.to_json(), "verdict": verdict.to_json()}
+                self.log,
+                "evaluated",
+                candidate,
+                {
+                    "run": run_label,
+                    "candidate": candidate.to_json(),
+                    "verdict": verdict.to_json(),
+                },
             )
             if verdict.status == "refuted":
                 learn([receipt], self.memory)
-                record(self.log, "learned", candidate, {"run": run_label, "reason": verdict.reason, "memory_size": len(self.memory)})
+                record(
+                    self.log,
+                    "learned",
+                    candidate,
+                    {
+                        "run": run_label,
+                        "reason": verdict.reason,
+                        "memory_size": len(self.memory),
+                    },
+                )
             auth = authorize(self.authorizer, candidate, verdict, self.policy)
             setattr(summary, auth.status, getattr(summary, auth.status) + 1)
             record(
                 self.log,
                 "authorized",
                 candidate,
-                {"run": run_label, "authorization": auth.to_json(), "policy": self.policy.to_json(), "verdict_status": verdict.status},
+                {
+                    "run": run_label,
+                    "authorization": auth.to_json(),
+                    "policy": self.policy.to_json(),
+                    "verdict_status": verdict.status,
+                },
             )
             if auth.status == "needs_human":
                 summary.pending_human.append((candidate, verdict, auth))
@@ -531,17 +646,35 @@ class Loop:
             cap = self.policy.max_applied_per_run
             if cap is not None and summary.applied >= cap:
                 summary.deferred += 1
-                record(self.log, "deferred", candidate, {"run": run_label, "reason": f"policy applies at most {cap} change(s) per run"})
+                record(
+                    self.log,
+                    "deferred",
+                    candidate,
+                    {
+                        "run": run_label,
+                        "reason": f"policy applies at most {cap} change(s) per run",
+                    },
+                )
                 continue
             try:
                 outcome = apply(candidate)
             except Exception as exc:  # the failure is a receipt, not a crash
                 summary.apply_failed += 1
-                record(self.log, "apply_failed", candidate, {"run": run_label, "error": f"{type(exc).__name__}: {exc}"})
+                record(
+                    self.log,
+                    "apply_failed",
+                    candidate,
+                    {"run": run_label, "error": f"{type(exc).__name__}: {exc}"},
+                )
                 continue
             summary.applied += 1
             summary.applied_candidates.append(candidate)
-            record(self.log, "applied", candidate, {"run": run_label, "outcome": dict(outcome)})
+            record(
+                self.log,
+                "applied",
+                candidate,
+                {"run": run_label, "outcome": dict(outcome)},
+            )
         return summary
 
 
@@ -554,7 +687,10 @@ def replay(log: ReceiptLog) -> Json:
     for receipt in log:
         if receipt.step == "applied":
             applied.append(receipt.candidate_id)
-        elif receipt.step == "authorized" and receipt.body.get("authorization", {}).get("status") == "needs_human":
+        elif (
+            receipt.step == "authorized"
+            and receipt.body.get("authorization", {}).get("status") == "needs_human"
+        ):
             pending.append(receipt.candidate_id)
     return {
         "receipts": len(log),

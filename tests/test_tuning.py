@@ -33,12 +33,39 @@ from smplcache.tuning import (
     vendored_engine_sha256,
 )
 import smplcache.tuning.replay as rp
-from smplcache.tuning.bandit import ThompsonAdmission, lfu_admission, lru_admission, run_capped
+from smplcache.tuning.bandit import (
+    ThompsonAdmission,
+    lfu_admission,
+    lru_admission,
+    run_capped,
+)
 from smplcache.tuning.counterfactual import estimate_capped_from_receipts
-from smplcache.tuning.mistakes import CounterfactualEvaluator, RereadSuggestionProposer, cluster_rereads, with_full_before_images
-from smplcache.tuning.replay import CacheConfig, CacheSim, benchmark_shapes, generate_day, run_plain, run_ttl
-from smplcache.tuning.search import HeldOutEvaluator, Rollout, audit_config_receipts, greedy_drop, uct_search
-from smplcache.tuning.store import InMemoryStoreAdapter, RedisStoreAdapter, StoreApplicationError
+from smplcache.tuning.mistakes import (
+    CounterfactualEvaluator,
+    RereadSuggestionProposer,
+    cluster_rereads,
+    with_full_before_images,
+)
+from smplcache.tuning.replay import (
+    CacheConfig,
+    CacheSim,
+    benchmark_shapes,
+    generate_day,
+    run_plain,
+    run_ttl,
+)
+from smplcache.tuning.search import (
+    HeldOutEvaluator,
+    Rollout,
+    audit_config_receipts,
+    greedy_drop,
+    uct_search,
+)
+from smplcache.tuning.store import (
+    InMemoryStoreAdapter,
+    RedisStoreAdapter,
+    StoreApplicationError,
+)
 
 try:
     import numpy  # noqa: F401
@@ -94,8 +121,15 @@ class TestVendoredEngine(unittest.TestCase):
         with self.assertRaises(RoleConflict):
             Loop(_Proposer([cand]), _Evaluator("supported"), SelfStamp(), policy)
         with self.assertRaises(SelfAuthorization):
-            authorize(SelfStamp(), cand, Verdict("supported", "e", "ok", {"improvement": 1.0}), policy)
-        denied = authorize(PolicyAuthorizer(), cand, Verdict("refuted", "e", "no"), policy)
+            authorize(
+                SelfStamp(),
+                cand,
+                Verdict("supported", "e", "ok", {"improvement": 1.0}),
+                policy,
+            )
+        denied = authorize(
+            PolicyAuthorizer(), cand, Verdict("refuted", "e", "no"), policy
+        )
         self.assertEqual(denied.status, "denied")
 
 
@@ -107,7 +141,9 @@ class TestReplayInvariants(unittest.TestCase):
         self.assertGreater(plain.oracle_checks, 50)
         self.assertGreater(plain.hit_rate, 0.5)
         ttl = run_ttl(day, 200)
-        self.assertGreater(ttl.oracle_mismatches, 0)  # the TTL baseline's defined failure, measured
+        self.assertGreater(
+            ttl.oracle_mismatches, 0
+        )  # the TTL baseline's defined failure, measured
 
     def test_window_slices_carry_database_state(self) -> None:
         day = generate_day(**SMALL)
@@ -117,16 +153,24 @@ class TestReplayInvariants(unittest.TestCase):
     def test_partition_store_only_adds_collateral_never_mismatch(self) -> None:
         day = generate_day(**SMALL)
         part = {n: ("a" if i % 2 else "b") for i, n in enumerate(NAMES)}
-        res = CacheSim(day, CacheConfig(frozenset(NAMES), part, "partition", label="p")).run()
+        res = CacheSim(
+            day, CacheConfig(frozenset(NAMES), part, "partition", label="p")
+        ).run()
         self.assertEqual(res.oracle_mismatches, 0)
         self.assertGreaterEqual(res.rereads, run_plain(day).rereads)
 
     def test_capped_admission_policies_keep_oracle_clean(self) -> None:
         day = generate_day(**SMALL)
-        for label, policy in (("lru", lru_admission), ("lfu", lfu_admission), ("ts", ThompsonAdmission(None, 1))):
+        for label, policy in (
+            ("lru", lru_admission),
+            ("lfu", lfu_admission),
+            ("ts", ThompsonAdmission(None, 1)),
+        ):
             res = run_capped(day, CACHEABLE, 4, policy, label)
             self.assertEqual(res.oracle_mismatches, 0, label)
-            self.assertLessEqual(max(len(CacheSim(day, CacheConfig(CACHEABLE)).resident()), 0), 11)
+            self.assertLessEqual(
+                max(len(CacheSim(day, CacheConfig(CACHEABLE)).resident()), 0), 11
+            )
 
     def test_counterfactual_estimate_matches_actual_capped_replay(self) -> None:
         day = generate_day(**SMALL)
@@ -134,13 +178,20 @@ class TestReplayInvariants(unittest.TestCase):
         for policy, fn in (("lru", lru_admission), ("lfu", lfu_admission)):
             est = estimate_capped_from_receipts(plain.event_log, CACHEABLE, 4, policy)
             actual = run_capped(day, CACHEABLE, 4, fn, policy, fast=True)
-            self.assertEqual((est["db_reads"], est["hits"]), (actual.db_reads, actual.hits), policy)
+            self.assertEqual(
+                (est["db_reads"], est["hits"]), (actual.db_reads, actual.hits), policy
+            )
 
 
 @unittest.skipUnless(HAS_NUMPY, "numpy extra not installed")
 class TestSpectral(unittest.TestCase):
     def test_density_matrix_entropy_and_partition(self) -> None:
-        from smplcache.tuning.spectral import EntropyDriftDetector, density_matrix, eigenmode_partition, von_neumann_entropy
+        from smplcache.tuning.spectral import (
+            EntropyDriftDetector,
+            density_matrix,
+            eigenmode_partition,
+            von_neumann_entropy,
+        )
 
         vecs = [frozenset({"a", "b"})] * 5 + [frozenset({"c"})] * 5
         rho = density_matrix(vecs, ["a", "b", "c", "d"])
@@ -154,27 +205,45 @@ class TestSpectral(unittest.TestCase):
         for v in vecs:
             det.observe(v)
         drifted, entropy = det.check()
-        self.assertTrue(drifted)  # first window with enough data counts as drift from "no reference"
+        self.assertTrue(
+            drifted
+        )  # first window with enough data counts as drift from "no reference"
         det.accept(entropy)
         self.assertFalse(det.check()[0])
 
     def test_repartition_loop_declines_a_bad_partition(self) -> None:
-        from smplcache.tuning.spectral import PartitionReplayEvaluator, relation_partition
+        from smplcache.tuning.spectral import (
+            PartitionReplayEvaluator,
+            relation_partition,
+        )
 
         day = generate_day(**SMALL)
         current = relation_partition(NAMES)
         bad = {n: "one" for n in NAMES}
-        cand = Candidate("repartition", {"k": 1, "partition": bad}, "spectral-repartition-proposer")
-        verdict = PartitionReplayEvaluator(min_writes=100).evaluate(cand, {"day": day, "current_partition": current, "materialized": frozenset(NAMES)})
+        cand = Candidate(
+            "repartition", {"k": 1, "partition": bad}, "spectral-repartition-proposer"
+        )
+        verdict = PartitionReplayEvaluator(min_writes=100).evaluate(
+            cand,
+            {
+                "day": day,
+                "current_partition": current,
+                "materialized": frozenset(NAMES),
+            },
+        )
         self.assertEqual(verdict.status, "refuted")
 
 
 class TestSearchAndBandit(unittest.TestCase):
-    def test_uct_never_beats_its_own_rollout_scores_and_greedy_is_consistent(self) -> None:
+    def test_uct_never_beats_its_own_rollout_scores_and_greedy_is_consistent(
+        self,
+    ) -> None:
         day = generate_day(**SMALL)
         rollout = Rollout(day, memory_cost=0.5)
         names = sorted(CACHEABLE)
-        best, value, stats = uct_search(frozenset(names), names, rollout, budget=6, depth=2)
+        best, value, stats = uct_search(
+            frozenset(names), names, rollout, budget=6, depth=2
+        )
         self.assertEqual(value, rollout.score(best))
         self.assertLessEqual(stats["rollouts"], 7)
         g_state, g_value = greedy_drop(frozenset(names), names, rollout)
@@ -183,14 +252,27 @@ class TestSearchAndBandit(unittest.TestCase):
     def test_held_out_evaluator_and_audit_agree(self) -> None:
         day = generate_day(**SMALL)
         names = sorted(CACHEABLE)
-        cand = Candidate("materialize_set", {"materialized": names[:5], "memory_cost": 0.5}, "uct-config-proposer")
-        loop = Loop(_Proposer([cand]), HeldOutEvaluator(), PolicyAuthorizer(), Policy("t", auto_approve_kinds=frozenset({"materialize_set"})))
-        loop.run_once({}, {"day": day, "materialized": frozenset(names)}, run_label="run-1")
+        cand = Candidate(
+            "materialize_set",
+            {"materialized": names[:5], "memory_cost": 0.5},
+            "uct-config-proposer",
+        )
+        loop = Loop(
+            _Proposer([cand]),
+            HeldOutEvaluator(),
+            PolicyAuthorizer(),
+            Policy("t", auto_approve_kinds=frozenset({"materialize_set"})),
+        )
+        loop.run_once(
+            {}, {"day": day, "materialized": frozenset(names)}, run_label="run-1"
+        )
         self.assertEqual(audit_config_receipts(loop.log, day, frozenset(names)), [])
 
     def test_admission_prior_learned_from_receipts(self) -> None:
         day = generate_day(**SMALL)
-        first = run_capped(day, CACHEABLE, 4, ThompsonAdmission(None, 1), "learn", fast=True)
+        first = run_capped(
+            day, CACHEABLE, 4, ThompsonAdmission(None, 1), "learn", fast=True
+        )
         prior = ThompsonAdmission.from_result(first)
         self.assertEqual(set(prior.prior), set(first.per_shape))
         for a, b in prior.prior.values():
@@ -210,25 +292,43 @@ class TestMistakes(unittest.TestCase):
             RereadSuggestionProposer(),
             CounterfactualEvaluator(),
             PolicyAuthorizer(),
-            Policy("e4", human_review_kinds=frozenset({"replica_identity_full", "admit_shape"})),
+            Policy(
+                "e4",
+                human_review_kinds=frozenset({"replica_identity_full", "admit_shape"}),
+            ),
         )
         applied: list[Candidate] = []
-        summary = loop.run_once({"result": plain}, {"day": day, "materialized": frozenset(NAMES)}, apply=lambda c: applied.append(c) or {}, run_label="run-1")
+        summary = loop.run_once(
+            {"result": plain},
+            {"day": day, "materialized": frozenset(NAMES)},
+            apply=lambda c: applied.append(c) or {},
+            run_label="run-1",
+        )
         self.assertGreaterEqual(summary.needs_human, 2)
         self.assertEqual(summary.applied, 0)
         self.assertEqual(applied, [])  # suggestions never self-apply
         kinds = {c.kind for c, _, _ in summary.pending_human}
         self.assertEqual(kinds, {"replica_identity_full", "admit_shape"})
-        supported = [v for c, v, _ in summary.pending_human if c.kind == "replica_identity_full"]
+        supported = [
+            v for c, v, _ in summary.pending_human if c.kind == "replica_identity_full"
+        ]
         self.assertTrue(all(v.status == "supported" for v in supported))
         self.assertEqual(loop.log.verify(), -1)
 
-    def test_full_before_images_remove_missing_evidence_and_keep_oracle_clean(self) -> None:
+    def test_full_before_images_remove_missing_evidence_and_keep_oracle_clean(
+        self,
+    ) -> None:
         day = generate_day(**SMALL)
         fixed = with_full_before_images(day, "customers")
         res = run_plain(fixed)
         self.assertEqual(res.oracle_mismatches, 0)
-        self.assertEqual(sum(s.reasons.get("missing_evidence_for_repair", 0) for s in res.per_shape.values()), 0)
+        self.assertEqual(
+            sum(
+                s.reasons.get("missing_evidence_for_repair", 0)
+                for s in res.per_shape.values()
+            ),
+            0,
+        )
 
 
 class TestStorePort(unittest.TestCase):
@@ -252,7 +352,9 @@ class TestStorePort(unittest.TestCase):
         store.apply_certified_decision("k", self._decision(DecisionKind.PRESERVE))
         self.assertEqual(store.get("k"), 2)
         with self.assertRaises(StoreApplicationError):
-            store.apply_certified_decision("k", self._decision(DecisionKind.INVALIDATE))  # cap reached, refused before touching
+            store.apply_certified_decision(
+                "k", self._decision(DecisionKind.INVALIDATE)
+            )  # cap reached, refused before touching
         self.assertEqual(store.get("k"), 2)
         self.assertEqual(len(store.get_certificates()), 2)
         self.assertEqual(len(log), 2)
@@ -261,7 +363,9 @@ class TestStorePort(unittest.TestCase):
     def test_redis_adapter_without_client_stores_receipt_next_to_key(self) -> None:
         store = RedisStoreAdapter()
         store.set("orders:sum", {"north": 5})
-        cert = store.apply_certified_decision("orders:sum", self._decision(DecisionKind.INVALIDATE))
+        cert = store.apply_certified_decision(
+            "orders:sum", self._decision(DecisionKind.INVALIDATE)
+        )
         self.assertIsNone(store.get("orders:sum"))
         receipt = store.get(store.receipt_key("orders:sum", cert.event_id))
         self.assertEqual(receipt["decision"], "invalidate")
@@ -292,7 +396,9 @@ class TestStorePort(unittest.TestCase):
 
 
 class TestMutations(unittest.TestCase):
-    def test_m1_keep_on_a_write_that_touches_the_query_is_caught_by_the_oracle(self) -> None:
+    def test_m1_keep_on_a_write_that_touches_the_query_is_caught_by_the_oracle(
+        self,
+    ) -> None:
         day = generate_day(**SMALL)
         real = rp.process_event
 
@@ -307,7 +413,9 @@ class TestMutations(unittest.TestCase):
         self.assertGreater(mutated.oracle_mismatches, 0)
         self.assertEqual(run_plain(day).oracle_mismatches, 0)  # fix: real certifier
         with mock.patch.object(rp, "process_event", keep):
-            self.assertGreater(run_plain(day).oracle_mismatches, 0)  # re-applied: caught again
+            self.assertGreater(
+                run_plain(day).oracle_mismatches, 0
+            )  # re-applied: caught again
 
     def test_m2_drift_threshold_zero_is_refused(self) -> None:
         if not HAS_NUMPY:
@@ -330,10 +438,20 @@ class TestMutations(unittest.TestCase):
                 return Authorization("approved", c.origin, "self", p.policy_id)
 
         with self.assertRaises(SelfAuthorization):
-            authorize(Forward(), cand, Verdict("supported", "e", "ok", {"improvement": 1.0}), Policy("t"))
+            authorize(
+                Forward(),
+                cand,
+                Verdict("supported", "e", "ok", {"improvement": 1.0}),
+                Policy("t"),
+            )
 
     def test_m4_one_corrupted_receipt_hash_is_caught(self) -> None:
-        loop = Loop(_Proposer([Candidate("tweak", {}, "p")]), _Evaluator("supported"), PolicyAuthorizer(), Policy("t", auto_approve_kinds=frozenset({"tweak"})))
+        loop = Loop(
+            _Proposer([Candidate("tweak", {}, "p")]),
+            _Evaluator("supported"),
+            PolicyAuthorizer(),
+            Policy("t", auto_approve_kinds=frozenset({"tweak"})),
+        )
         loop.run_once({}, None, apply=lambda c: {})
         receipts = loop.log.to_json()
         receipts[2]["hash"] = receipts[2]["hash"][::-1]
@@ -346,16 +464,26 @@ class TestMutations(unittest.TestCase):
     def test_m5_mistake_memory_removed_repeats_the_mistake(self) -> None:
         cand = Candidate("tweak", {"x": 1}, "p")
         policy = Policy("t", auto_approve_kinds=frozenset({"tweak"}))
-        mutated = Loop(_Proposer([cand]), _Evaluator("refuted"), PolicyAuthorizer(), policy, memory=_NullMemory())
+        mutated = Loop(
+            _Proposer([cand]),
+            _Evaluator("refuted"),
+            PolicyAuthorizer(),
+            policy,
+            memory=_NullMemory(),
+        )
         mutated.run_once({}, None)
         self.assertEqual(mutated.run_once({}, None).refuted, 1)
-        fixed = Loop(_Proposer([cand]), _Evaluator("refuted"), PolicyAuthorizer(), policy)
+        fixed = Loop(
+            _Proposer([cand]), _Evaluator("refuted"), PolicyAuthorizer(), policy
+        )
         fixed.run_once({}, None)
         self.assertEqual(fixed.run_once({}, None).skipped_known_mistakes, 1)
 
     def test_m6_store_that_ignores_invalidation_is_caught_by_the_oracle(self) -> None:
         day = generate_day(**SMALL)
-        with mock.patch.object(CacheSim, "_drop", lambda self, name, reason, collateral=False: None):
+        with mock.patch.object(
+            CacheSim, "_drop", lambda self, name, reason, collateral=False: None
+        ):
             mutated = run_plain(day)
         self.assertGreater(mutated.oracle_mismatches, 0)
         self.assertEqual(run_plain(day).oracle_mismatches, 0)
@@ -365,24 +493,49 @@ class TestMutations(unittest.TestCase):
         start = len(day.stream) // 2
         mutated = rp.Day(day.seed_rows, day.stream[start:], day.seed, 0)
         self.assertGreater(run_plain(mutated).oracle_mismatches, 0)
-        self.assertEqual(run_plain(day.slice(start, len(day.stream))).oracle_mismatches, 0)
+        self.assertEqual(
+            run_plain(day.slice(start, len(day.stream))).oracle_mismatches, 0
+        )
 
     def test_m8_lying_held_out_evaluator_is_caught_by_the_receipt_audit(self) -> None:
         day = generate_day(**SMALL)
         names = sorted(CACHEABLE)
-        cand = Candidate("materialize_set", {"materialized": names[:3], "memory_cost": 0.5}, "uct-config-proposer")
+        cand = Candidate(
+            "materialize_set",
+            {"materialized": names[:3], "memory_cost": 0.5},
+            "uct-config-proposer",
+        )
 
         class Liar:
             name = "held-out-config-evaluator"
 
             def evaluate(self, c: Candidate, h: Any) -> Verdict:
-                return Verdict("supported", self.name, "mutated", {"improvement": 1.0, "db_reads_before": 0, "db_reads_after": 0})
+                return Verdict(
+                    "supported",
+                    self.name,
+                    "mutated",
+                    {"improvement": 1.0, "db_reads_before": 0, "db_reads_after": 0},
+                )
 
-        loop = Loop(_Proposer([cand]), Liar(), PolicyAuthorizer(), Policy("t", auto_approve_kinds=frozenset({"materialize_set"})))
-        loop.run_once({}, {"day": day, "materialized": frozenset(names)}, run_label="run-1")
+        loop = Loop(
+            _Proposer([cand]),
+            Liar(),
+            PolicyAuthorizer(),
+            Policy("t", auto_approve_kinds=frozenset({"materialize_set"})),
+        )
+        loop.run_once(
+            {}, {"day": day, "materialized": frozenset(names)}, run_label="run-1"
+        )
         self.assertTrue(audit_config_receipts(loop.log, day, frozenset(names)))
-        honest = Loop(_Proposer([cand]), HeldOutEvaluator(), PolicyAuthorizer(), Policy("t", auto_approve_kinds=frozenset({"materialize_set"})))
-        honest.run_once({}, {"day": day, "materialized": frozenset(names)}, run_label="run-1")
+        honest = Loop(
+            _Proposer([cand]),
+            HeldOutEvaluator(),
+            PolicyAuthorizer(),
+            Policy("t", auto_approve_kinds=frozenset({"materialize_set"})),
+        )
+        honest.run_once(
+            {}, {"day": day, "materialized": frozenset(names)}, run_label="run-1"
+        )
         self.assertEqual(audit_config_receipts(honest.log, day, frozenset(names)), [])
 
     def test_m9_store_adapter_whose_delete_fails_is_caught(self) -> None:
@@ -392,7 +545,9 @@ class TestMutations(unittest.TestCase):
         with mock.patch.object(InMemoryStoreAdapter, "delete", lambda self, key: False):
             with self.assertRaises(StoreApplicationError):
                 store.apply_certified_decision("k", Decision.invalidate("x", cert))
-        self.assertEqual(store.get_certificates(), [])  # no receipt for a failed application
+        self.assertEqual(
+            store.get_certificates(), []
+        )  # no receipt for a failed application
         store.apply_certified_decision("k", Decision.invalidate("x", cert))
         self.assertIsNone(store.get("k"))
 
@@ -403,9 +558,24 @@ class TestMutations(unittest.TestCase):
 
     def test_m11_certifier_itself_refuses_repair_without_before_image(self) -> None:
         shape = QueryShape("customers", "sum", "credit", ("region",), name="s")
-        event = WriteEvent("customers", set(), {"id": 1}, {"id": 1, "region": "north", "credit": 5}, "e", "UPDATE", unavailable_cols={"region", "credit"})
+        event = WriteEvent(
+            "customers",
+            set(),
+            {"id": 1},
+            {"id": 1, "region": "north", "credit": 5},
+            "e",
+            "UPDATE",
+            unavailable_cols={"region", "credit"},
+        )
         self.assertEqual(certify_event(shape, event).kind, DecisionKind.INVALIDATE)
-        full = WriteEvent("customers", set(), {"id": 1, "region": "north", "credit": 4}, {"id": 1, "region": "north", "credit": 5}, "e", "UPDATE")
+        full = WriteEvent(
+            "customers",
+            set(),
+            {"id": 1, "region": "north", "credit": 4},
+            {"id": 1, "region": "north", "credit": 5},
+            "e",
+            "UPDATE",
+        )
         self.assertEqual(certify_event(shape, full).kind, DecisionKind.REPAIR)
 
 

@@ -42,7 +42,9 @@ def effective_certificate(decision: Decision) -> Certificate:
             reason_code="repair_execution_unavailable",
             repair_program=None,
         )
-    return replace(decision.certificate, decision_kind=decision.kind, reason_code=decision.reason)
+    return replace(
+        decision.certificate, decision_kind=decision.kind, reason_code=decision.reason
+    )
 
 
 def certificate_json(cert: Certificate) -> Dict[str, Any]:
@@ -78,7 +80,11 @@ class InMemoryStoreAdapter(SmplCacheStore):
     old receipt is dropped.
     """
 
-    def __init__(self, max_certificates: int = DEFAULT_MAX_CERTIFICATES, receipt_log: ReceiptLog | None = None) -> None:
+    def __init__(
+        self,
+        max_certificates: int = DEFAULT_MAX_CERTIFICATES,
+        receipt_log: ReceiptLog | None = None,
+    ) -> None:
         if max_certificates < 1:
             raise ValueError("max_certificates must be at least 1")
         self._store: Dict[str, Any] = {}
@@ -101,9 +107,14 @@ class InMemoryStoreAdapter(SmplCacheStore):
     def apply_certified_decision(self, key: str, decision: Decision) -> Certificate:
         cert = effective_certificate(decision)
         if len(self._certificates) >= self._max_certificates:
-            raise StoreApplicationError(f"receipt cap of {self._max_certificates} reached; application refused")
+            raise StoreApplicationError(
+                f"receipt cap of {self._max_certificates} reached; application refused"
+            )
         try:
-            if cert.decision_kind in (DecisionKind.INVALIDATE, DecisionKind.UNSUPPORTED):
+            if cert.decision_kind in (
+                DecisionKind.INVALIDATE,
+                DecisionKind.UNSUPPORTED,
+            ):
                 self.delete(key)
                 # Read through the public accessor as well as checking presence;
                 # None is a legal cached value and cannot prove absence alone.
@@ -112,7 +123,11 @@ class InMemoryStoreAdapter(SmplCacheStore):
                     raise StoreApplicationError("cache key remains after eviction")
             self._certificates.append(cert)
             if self.receipt_log is not None:
-                self.receipt_log.append("applied", f"store:{key}", {"key": key, "certificate": certificate_json(cert)})
+                self.receipt_log.append(
+                    "applied",
+                    f"store:{key}",
+                    {"key": key, "certificate": certificate_json(cert)},
+                )
         except Exception as exc:
             raise StoreApplicationError("cache application failed") from exc
         return cert
@@ -124,7 +139,9 @@ class InMemoryStoreAdapter(SmplCacheStore):
 class RedisStoreAdapter(SmplCacheStore):
     """redis-py compatible adapter; with no client it keeps a local JSON dictionary."""
 
-    def __init__(self, redis_client: Any = None, receipt_log: ReceiptLog | None = None) -> None:
+    def __init__(
+        self, redis_client: Any = None, receipt_log: ReceiptLog | None = None
+    ) -> None:
         self.redis = redis_client
         self._mock_memory: Dict[str, str] = {}
         self.receipt_log = receipt_log
@@ -159,7 +176,10 @@ class RedisStoreAdapter(SmplCacheStore):
     def apply_certified_decision(self, key: str, decision: Decision) -> Certificate:
         cert = effective_certificate(decision)
         try:
-            if cert.decision_kind in (DecisionKind.INVALIDATE, DecisionKind.UNSUPPORTED):
+            if cert.decision_kind in (
+                DecisionKind.INVALIDATE,
+                DecisionKind.UNSUPPORTED,
+            ):
                 self.delete(key)
                 if self._raw_get(key) is not None:
                     raise StoreApplicationError("cache key remains after eviction")
@@ -167,11 +187,23 @@ class RedisStoreAdapter(SmplCacheStore):
             cert_json = json.dumps(certificate_json(cert), sort_keys=True)
             if self.redis is not None:
                 if self.redis.set(cert_key, cert_json) is not True:
-                    raise StoreApplicationError("receipt persistence was not acknowledged")
+                    raise StoreApplicationError(
+                        "receipt persistence was not acknowledged"
+                    )
             else:
                 self._mock_memory[cert_key] = cert_json
             if self.receipt_log is not None:
-                self.receipt_log.append("applied", f"store:{key}", {"key": key, "receipt_key": cert_key, "certificate": certificate_json(cert)})
+                self.receipt_log.append(
+                    "applied",
+                    f"store:{key}",
+                    {
+                        "key": key,
+                        "receipt_key": cert_key,
+                        "certificate": certificate_json(cert),
+                    },
+                )
         except Exception as exc:
-            raise StoreApplicationError("cache application or receipt persistence failed") from exc
+            raise StoreApplicationError(
+                "cache application or receipt persistence failed"
+            ) from exc
         return cert

@@ -19,7 +19,12 @@ import time
 from typing import Any, Iterable
 
 
-def estimate_capped_from_receipts(event_log: Iterable[tuple[int, str, str]], materialized: frozenset[str], cap: int, policy: str) -> dict[str, Any]:
+def estimate_capped_from_receipts(
+    event_log: Iterable[tuple[int, str, str]],
+    materialized: frozenset[str],
+    cap: int,
+    policy: str,
+) -> dict[str, Any]:
     t0 = time.time()
     resident: dict[str, bool] = {}  # shape -> valid
     last_read: dict[str, int] = {}
@@ -48,8 +53,16 @@ def estimate_capped_from_receipts(event_log: Iterable[tuple[int, str, str]], mat
             if policy == "lru":
                 victim = min(resident, key=lambda n: last_read.get(n, -1))
             else:
-                victim = min(resident, key=lambda n: (read_count.get(n, 0), last_read.get(n, -1)))
+                victim = min(
+                    resident, key=lambda n: (read_count.get(n, 0), last_read.get(n, -1))
+                )
             del resident[victim]
         resident[shape] = True
         db_reads += 1
-    return {"reads": reads, "hits": hits, "db_reads": db_reads, "rereads": rereads, "seconds": round(time.time() - t0, 3)}
+    return {
+        "reads": reads,
+        "hits": hits,
+        "db_reads": db_reads,
+        "rereads": rereads,
+        "seconds": round(time.time() - t0, 3),
+    }

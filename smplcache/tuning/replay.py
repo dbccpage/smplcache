@@ -60,17 +60,69 @@ def benchmark_shapes() -> list[QueryShape]:
     """Twelve cached queries; one (MAX) is outside the admitted fragment on purpose."""
     return [
         QueryShape("orders", "sum", "amount", ("region",), name="sum_amount_by_region"),
-        QueryShape("orders", "count_star", None, (), Predicate((("status", "=", "paid"),)), name="count_paid_orders"),
-        QueryShape("orders", "avg", "amount", (), Predicate((("status", "=", "paid"),)), name="avg_amount_paid"),
-        QueryShape("orders", "sum", "amount", ("customer_id",), name="sum_amount_by_customer"),
-        QueryShape("orders", "count_star", None, ("status",), name="count_orders_by_status"),
-        QueryShape("orders", "count_star", None, (), Predicate((("region", "=", "west"),)), name="count_orders_west"),
-        QueryShape("orders", None, None, (), name="max_amount_by_region", aggregate_cols=("max(amount)",)),
-        QueryShape("customers", "count_star", None, ("tier",), name="count_customers_by_tier"),
-        QueryShape("customers", "sum", "credit", ("region",), name="sum_credit_by_region"),
-        QueryShape("customers", "avg", "credit", (), Predicate((("tier", "=", "gold"),)), name="avg_credit_gold"),
-        QueryShape("inventory", "sum", "quantity", ("warehouse",), name="sum_qty_by_warehouse"),
-        QueryShape("inventory", "count_star", None, (), Predicate((("quantity", "<", 10),)), name="count_low_stock"),
+        QueryShape(
+            "orders",
+            "count_star",
+            None,
+            (),
+            Predicate((("status", "=", "paid"),)),
+            name="count_paid_orders",
+        ),
+        QueryShape(
+            "orders",
+            "avg",
+            "amount",
+            (),
+            Predicate((("status", "=", "paid"),)),
+            name="avg_amount_paid",
+        ),
+        QueryShape(
+            "orders", "sum", "amount", ("customer_id",), name="sum_amount_by_customer"
+        ),
+        QueryShape(
+            "orders", "count_star", None, ("status",), name="count_orders_by_status"
+        ),
+        QueryShape(
+            "orders",
+            "count_star",
+            None,
+            (),
+            Predicate((("region", "=", "west"),)),
+            name="count_orders_west",
+        ),
+        QueryShape(
+            "orders",
+            None,
+            None,
+            (),
+            name="max_amount_by_region",
+            aggregate_cols=("max(amount)",),
+        ),
+        QueryShape(
+            "customers", "count_star", None, ("tier",), name="count_customers_by_tier"
+        ),
+        QueryShape(
+            "customers", "sum", "credit", ("region",), name="sum_credit_by_region"
+        ),
+        QueryShape(
+            "customers",
+            "avg",
+            "credit",
+            (),
+            Predicate((("tier", "=", "gold"),)),
+            name="avg_credit_gold",
+        ),
+        QueryShape(
+            "inventory", "sum", "quantity", ("warehouse",), name="sum_qty_by_warehouse"
+        ),
+        QueryShape(
+            "inventory",
+            "count_star",
+            None,
+            (),
+            Predicate((("quantity", "<", 10),)),
+            name="count_low_stock",
+        ),
     ]
 
 
@@ -109,7 +161,12 @@ class Day:
             if isinstance(op, WriteEvent):
                 db.apply(op)
         seed = {t: db.rows(t) for t in TABLES}
-        return Day(seed, self.stream[start:stop], self.seed, max(self.phase_change_at - start, 0))
+        return Day(
+            seed,
+            self.stream[start:stop],
+            self.seed,
+            max(self.phase_change_at - start, 0),
+        )
 
 
 def _zipf_weights(n: int, s: float) -> list[float]:
@@ -140,11 +197,29 @@ def generate_day(
         rid = next_id[table]
         next_id[table] += 1
         if table == "orders":
-            return {"id": rid, "customer_id": rng.randint(1, rows_per_table // 4), "status": rng.choice(STATUSES),
-                    "amount": rng.randint(1, 500), "region": rng.choice(REGIONS), "notes": "n"}
+            return {
+                "id": rid,
+                "customer_id": rng.randint(1, rows_per_table // 4),
+                "status": rng.choice(STATUSES),
+                "amount": rng.randint(1, 500),
+                "region": rng.choice(REGIONS),
+                "notes": "n",
+            }
         if table == "customers":
-            return {"id": rid, "region": rng.choice(REGIONS), "tier": rng.choice(TIERS), "credit": rng.randint(0, 1000), "notes": "n"}
-        return {"id": rid, "sku": f"sku{rid}", "warehouse": rng.choice(WAREHOUSES), "quantity": rng.randint(0, 50), "notes": "n"}
+            return {
+                "id": rid,
+                "region": rng.choice(REGIONS),
+                "tier": rng.choice(TIERS),
+                "credit": rng.randint(0, 1000),
+                "notes": "n",
+            }
+        return {
+            "id": rid,
+            "sku": f"sku{rid}",
+            "warehouse": rng.choice(WAREHOUSES),
+            "quantity": rng.randint(0, 50),
+            "notes": "n",
+        }
 
     for table in TABLES:
         for _ in range(rows_per_table):
@@ -154,16 +229,36 @@ def generate_day(
     no_before_image = set(replica_identity_default)
 
     # phase 1: orders dominate, amount/status churn; phase 2: inventory and region churn
-    table_mix = {1: (("orders", 0.7), ("customers", 0.15), ("inventory", 0.15)), 2: (("orders", 0.35), ("customers", 0.15), ("inventory", 0.5))}
-    col_mix = {
-        1: {"orders": (("amount", 0.45), ("status", 0.25), ("notes", 0.2), ("region", 0.1)),
-            "customers": (("credit", 0.5), ("tier", 0.2), ("notes", 0.3)),
-            "inventory": (("quantity", 0.6), ("notes", 0.4))},
-        2: {"orders": (("region", 0.4), ("notes", 0.3), ("amount", 0.2), ("status", 0.1)),
-            "customers": (("region", 0.4), ("credit", 0.3), ("notes", 0.3)),
-            "inventory": (("quantity", 0.8), ("warehouse", 0.2))},
+    table_mix = {
+        1: (("orders", 0.7), ("customers", 0.15), ("inventory", 0.15)),
+        2: (("orders", 0.35), ("customers", 0.15), ("inventory", 0.5)),
     }
-    read_mix = {1: _zipf_weights(len(shape_names), zipf_s), 2: list(reversed(_zipf_weights(len(shape_names), zipf_s)))}
+    col_mix = {
+        1: {
+            "orders": (
+                ("amount", 0.45),
+                ("status", 0.25),
+                ("notes", 0.2),
+                ("region", 0.1),
+            ),
+            "customers": (("credit", 0.5), ("tier", 0.2), ("notes", 0.3)),
+            "inventory": (("quantity", 0.6), ("notes", 0.4)),
+        },
+        2: {
+            "orders": (
+                ("region", 0.4),
+                ("notes", 0.3),
+                ("amount", 0.2),
+                ("status", 0.1),
+            ),
+            "customers": (("region", 0.4), ("credit", 0.3), ("notes", 0.3)),
+            "inventory": (("quantity", 0.8), ("warehouse", 0.2)),
+        },
+    }
+    read_mix = {
+        1: _zipf_weights(len(shape_names), zipf_s),
+        2: list(reversed(_zipf_weights(len(shape_names), zipf_s))),
+    }
 
     def pick(pairs: Sequence[tuple[str, float]]) -> str:
         return rng.choices([p[0] for p in pairs], weights=[p[1] for p in pairs])[0]
@@ -201,11 +296,31 @@ def generate_day(
         if op_roll < 0.2 or not live[table]:
             row = new_row(table)
             live[table][row["id"]] = row
-            stream.append(WriteEvent(table, set(), {}, dict(row), f"evt-{seq}", "INSERT", boundary_clock=clock))
+            stream.append(
+                WriteEvent(
+                    table,
+                    set(),
+                    {},
+                    dict(row),
+                    f"evt-{seq}",
+                    "INSERT",
+                    boundary_clock=clock,
+                )
+            )
         elif op_roll < 0.3:
             rid = hot_ids[table].pick(sorted(live[table]))
             row = live[table].pop(rid)
-            stream.append(WriteEvent(table, set(), dict(row), {}, f"evt-{seq}", "DELETE", boundary_clock=clock))
+            stream.append(
+                WriteEvent(
+                    table,
+                    set(),
+                    dict(row),
+                    {},
+                    f"evt-{seq}",
+                    "DELETE",
+                    boundary_clock=clock,
+                )
+            )
         else:
             rid = hot_ids[table].pick(sorted(live[table]))
             row = live[table][rid]
@@ -216,15 +331,37 @@ def generate_day(
             live[table][rid] = new
             if table in no_before_image:
                 unavailable = {c for c in TABLES[table] if c != "id"}
-                stream.append(WriteEvent(table, set(), {"id": rid}, dict(new), f"evt-{seq}", "UPDATE",
-                                         unavailable_cols=unavailable, boundary_clock=clock))
+                stream.append(
+                    WriteEvent(
+                        table,
+                        set(),
+                        {"id": rid},
+                        dict(new),
+                        f"evt-{seq}",
+                        "UPDATE",
+                        unavailable_cols=unavailable,
+                        boundary_clock=clock,
+                    )
+                )
             else:
-                stream.append(WriteEvent(table, set(), old_full, dict(new), f"evt-{seq}", "UPDATE", boundary_clock=clock))
+                stream.append(
+                    WriteEvent(
+                        table,
+                        set(),
+                        old_full,
+                        dict(new),
+                        f"evt-{seq}",
+                        "UPDATE",
+                        boundary_clock=clock,
+                    )
+                )
         read_budget += reads_per_write
         while read_budget >= 1.0:
             read_budget -= 1.0
             seq += 1
-            stream.append(ReadOp(rng.choices(shape_names, weights=read_mix[phase])[0], seq))
+            stream.append(
+                ReadOp(rng.choices(shape_names, weights=read_mix[phase])[0], seq)
+            )
     return Day(seed_rows, stream, seed, phase_change_at)
 
 
@@ -236,7 +373,11 @@ class ZipfIds:
         self.rng = rng
 
     def pick(self, ids: Sequence[int]) -> int:
-        w = self.weights[: len(ids)] if len(ids) <= len(self.weights) else self.weights + [self.weights[-1]] * (len(ids) - len(self.weights))
+        w = (
+            self.weights[: len(ids)]
+            if len(ids) <= len(self.weights)
+            else self.weights + [self.weights[-1]] * (len(ids) - len(self.weights))
+        )
         return self.rng.choices(ids, weights=w)[0]
 
 
@@ -264,7 +405,9 @@ class SqlDatabase:
                 tuple(event.new.get(c) for c in cols),
             )
         elif event.operation == "DELETE":
-            self.con.execute(f"DELETE FROM {event.relation} WHERE id = ?", (event.old["id"],))
+            self.con.execute(
+                f"DELETE FROM {event.relation} WHERE id = ?", (event.old["id"],)
+            )
         else:
             sets = ", ".join(f"{c} = ?" for c in cols if c != "id")
             self.con.execute(
@@ -274,13 +417,20 @@ class SqlDatabase:
 
     def rows(self, table: str) -> list[dict[str, Any]]:
         cols = TABLES[table]
-        return [dict(zip(cols, r)) for r in self.con.execute(f"SELECT {', '.join(cols)} FROM {table}")]
+        return [
+            dict(zip(cols, r))
+            for r in self.con.execute(f"SELECT {', '.join(cols)} FROM {table}")
+        ]
 
     def query(self, shape: QueryShape) -> dict[Any, Decimal | None]:
         """Run the shape's SQL and return {group_key: value} with exact Decimal arithmetic."""
         self.queries += 1
         rows = self.rows(shape.relation)
-        return AggregateCache.from_rows(shape, rows).values if shape.agg_fn is not None else _extremum(shape, rows)
+        return (
+            AggregateCache.from_rows(shape, rows).values
+            if shape.agg_fn is not None
+            else _extremum(shape, rows)
+        )
 
     def sql_check(self, shape: QueryShape) -> dict[Any, Decimal | None]:
         """Independent SQL evaluation (not AggregateCache) used only by the oracle."""
@@ -289,7 +439,11 @@ class SqlDatabase:
         out: dict[Any, Decimal | None] = {}
         ngroups = len(shape.group_cols)
         for row in self.con.execute(sql).fetchall():
-            key: Any = () if ngroups == 0 else (row[0] if ngroups == 1 else tuple(row[:ngroups]))
+            key: Any = (
+                ()
+                if ngroups == 0
+                else (row[0] if ngroups == 1 else tuple(row[:ngroups]))
+            )
             val = row[-1]
             out[key] = None if val is None else Decimal(str(val))
         if ngroups == 0 and not out:
@@ -297,7 +451,9 @@ class SqlDatabase:
         return out
 
 
-def _extremum(shape: QueryShape, rows: Sequence[Mapping[str, Any]]) -> dict[Any, Decimal | None]:
+def _extremum(
+    shape: QueryShape, rows: Sequence[Mapping[str, Any]]
+) -> dict[Any, Decimal | None]:
     """Reference values for the unsupported MAX shape (it is always read from the database)."""
     out: dict[Any, Decimal | None] = {}
     for r in rows:
@@ -312,21 +468,29 @@ def shape_sql(shape: QueryShape) -> str:
     if shape.agg_fn is None:
         return "SELECT region, MAX(amount) FROM orders GROUP BY region"
     parts = list(shape.group_cols)
-    agg = {"sum": f"SUM({shape.agg_col})", "count": f"COUNT({shape.agg_col})", "count_star": "COUNT(*)", "avg": f"AVG({shape.agg_col})"}[shape.agg_fn]
+    agg = {
+        "sum": f"SUM({shape.agg_col})",
+        "count": f"COUNT({shape.agg_col})",
+        "count_star": "COUNT(*)",
+        "avg": f"AVG({shape.agg_col})",
+    }[shape.agg_fn]
     if shape.agg_fn == "avg":
         agg = f"SUM({shape.agg_col}) * 1.0 / COUNT({shape.agg_col})"
     parts.append(agg)
     sql = f"SELECT {', '.join(parts)} FROM {shape.relation}"
     if shape.predicate.terms:
         sql += " WHERE " + " AND ".join(
-            f"{c} {'=' if op in ('=', '==') else op} {repr(lit) if isinstance(lit, str) else lit}" for c, op, lit in shape.predicate.terms
+            f"{c} {'=' if op in ('=', '==') else op} {repr(lit) if isinstance(lit, str) else lit}"
+            for c, op, lit in shape.predicate.terms
         )
     if shape.group_cols:
         sql += " GROUP BY " + ", ".join(shape.group_cols)
     return sql
 
 
-def values_match(cached: Mapping[Any, Any], oracle: Mapping[Any, Any], agg_fn: str | None) -> bool:
+def values_match(
+    cached: Mapping[Any, Any], oracle: Mapping[Any, Any], agg_fn: str | None
+) -> bool:
     if set(cached) != set(oracle):
         return False
     for k, v in cached.items():
@@ -336,7 +500,9 @@ def values_match(cached: Mapping[Any, Any], oracle: Mapping[Any, Any], agg_fn: s
                 return False
             continue
         if agg_fn == "avg":
-            if abs(Decimal(v) - Decimal(o)) > Decimal("0.000001") * max(1, abs(Decimal(o))):
+            if abs(Decimal(v) - Decimal(o)) > Decimal("0.000001") * max(
+                Decimal(1), abs(Decimal(o))
+            ):
                 return False
         elif not _values_equal(v, o):
             return False
@@ -435,7 +601,14 @@ class CacheConfig:
 class CacheSim:
     """Replay a `Day` against one `CacheConfig`; every served value is oracle-checked."""
 
-    def __init__(self, day: Day, config: CacheConfig, shapes: Sequence[QueryShape] | None = None, oracle_every: int = 1, fast: bool = False) -> None:
+    def __init__(
+        self,
+        day: Day,
+        config: CacheConfig,
+        shapes: Sequence[QueryShape] | None = None,
+        oracle_every: int = 1,
+        fast: bool = False,
+    ) -> None:
         """``fast`` skips oracle checks and the SQL for uncached reads (counts them only).
         Evaluators use it for rollouts; every reported run uses ``fast=False``."""
         self.day = day
@@ -448,7 +621,9 @@ class CacheSim:
         self.expires_at: dict[str, int] = {}
         self.last_read: dict[str, int] = {}
         self.read_count: dict[str, int] = {}
-        self.result = ReplayResult(config.label, per_shape={n: ShapeStats() for n in self.shapes})
+        self.result = ReplayResult(
+            config.label, per_shape={n: ShapeStats() for n in self.shapes}
+        )
         self.oracle_every = oracle_every
         self.fast = fast
         self.clock = 0
@@ -478,7 +653,9 @@ class CacheSim:
         self.cached[name] = cache
         self.valid[name] = True
         self.expires_at[name] = self.clock + (self.config.ttl_events or 0)
-        stats.epochs_without_hit += 1  # moved to epochs_with_hit on this epoch's first hit
+        stats.epochs_without_hit += (
+            1  # moved to epochs_with_hit on this epoch's first hit
+        )
 
     def _drop(self, name: str, reason: str, collateral: bool = False) -> None:
         if self.cached.get(name) is None:
@@ -526,9 +703,16 @@ class CacheSim:
                 touched.add(name)
                 invalidated.add(name)
                 self.result.certificates.append(
-                    {"shape": name, "event_id": event.event_id, "relation": event.relation, "decision": decision.kind.value,
-                     "reason": decision.reason, "required": list(decision.certificate.required_evidence),
-                     "available": list(decision.certificate.available_evidence), "unavailable": sorted(event.unavailable_cols)}
+                    {
+                        "shape": name,
+                        "event_id": event.event_id,
+                        "relation": event.relation,
+                        "decision": decision.kind.value,
+                        "reason": decision.reason,
+                        "required": list(decision.certificate.required_evidence),
+                        "available": list(decision.certificate.available_evidence),
+                        "unavailable": sorted(event.unavailable_cols),
+                    }
                 )
                 self._drop(name, decision.reason)
                 self.result.event_log.append((self.clock, "invalidate", name))
@@ -559,8 +743,13 @@ class CacheSim:
             return
         cache = self.cached.get(name)
         if cache is None:
-            if self.config.shape_cap is not None and len(self.resident()) >= self.config.shape_cap:
-                victim = self.config.admission(self, name) if self.config.admission else None
+            if (
+                self.config.shape_cap is not None
+                and len(self.resident()) >= self.config.shape_cap
+            ):
+                victim = (
+                    self.config.admission(self, name) if self.config.admission else None
+                )
                 if victim is None:
                     self.result.db_reads += 1
                     stats.db_reads += 1
@@ -605,23 +794,52 @@ class CacheSim:
         return self.result
 
 
-def run_plain(day: Day, shapes: Sequence[QueryShape] | None = None, **kw: Any) -> ReplayResult:
+def run_plain(
+    day: Day, shapes: Sequence[QueryShape] | None = None, **kw: Any
+) -> ReplayResult:
     names = frozenset(s.name for s in (shapes or benchmark_shapes()))
-    return CacheSim(day, CacheConfig(materialized=names, label="plain"), shapes, **kw).run()
+    return CacheSim(
+        day, CacheConfig(materialized=names, label="plain"), shapes, **kw
+    ).run()
 
 
-def run_ttl(day: Day, ttl_events: int = 200, shapes: Sequence[QueryShape] | None = None, **kw: Any) -> ReplayResult:
+def run_ttl(
+    day: Day,
+    ttl_events: int = 200,
+    shapes: Sequence[QueryShape] | None = None,
+    **kw: Any,
+) -> ReplayResult:
     names = frozenset(s.name for s in (shapes or benchmark_shapes()))
-    return CacheSim(day, CacheConfig(materialized=names, ttl_events=ttl_events, label=f"ttl-{ttl_events}"), shapes, **kw).run()
+    return CacheSim(
+        day,
+        CacheConfig(
+            materialized=names, ttl_events=ttl_events, label=f"ttl-{ttl_events}"
+        ),
+        shapes,
+        **kw,
+    ).run()
 
 
-def run_uncached(day: Day, shapes: Sequence[QueryShape] | None = None, **kw: Any) -> ReplayResult:
-    return CacheSim(day, CacheConfig(materialized=frozenset(), label="uncached"), shapes, **kw).run()
+def run_uncached(
+    day: Day, shapes: Sequence[QueryShape] | None = None, **kw: Any
+) -> ReplayResult:
+    return CacheSim(
+        day, CacheConfig(materialized=frozenset(), label="uncached"), shapes, **kw
+    ).run()
 
 
 def table_markdown(results: Iterable[ReplayResult]) -> str:
     rows = [r.row() for r in results]
-    cols = ["label", "db_reads", "rereads", "hit_rate", "p99_decision_latency_us", "oracle_mismatches", "collateral_flushes", "peak_cached_groups"]
+    cols = [
+        "label",
+        "db_reads",
+        "rereads",
+        "hit_rate",
+        "p99_decision_latency_us",
+        "oracle_mismatches",
+        "collateral_flushes",
+        "peak_cached_groups",
+    ]
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:
         lines.append("| " + " | ".join(str(r[c]) for c in cols) + " |")

@@ -13,7 +13,7 @@ Layout:
 - `_engine.py`: the five-verb loop (propose / evaluate / authorize / record /
   learn) with hash-chained receipts and a mistake memory. It is a verbatim
   copy of `src/anomalon_workbench/tuner.py` from `dbccpage/owed_ai` at
-  commit `5c03b43486d883144f2f082c037629dcda2c5117` (sha256 recorded in
+  commit `690ab5dca093eeaa768ddb9b1144f39ae95a7491` (sha256 recorded in
   `VENDORED_ENGINE_SHA256`). SmplCache depends on no other repository; the
   owed_ai module is the reference implementation and this copy is checked
   against its hash in `tests/test_tuning.py`.
@@ -57,12 +57,14 @@ from smplcache.tuning._engine import (
     replay,
 )
 
-VENDORED_ENGINE_SOURCE = "dbccpage/owed_ai@5c03b43486d883144f2f082c037629dcda2c5117:src/anomalon_workbench/tuner.py"
-VENDORED_ENGINE_SHA256 = "7b22d9e085e20bc09d3a941a242a3d6179727ba45ea95d5b8805a67c25157455"
+VENDORED_ENGINE_SOURCE = "dbccpage/owed_ai@690ab5dca093eeaa768ddb9b1144f39ae95a7491:src/anomalon_workbench/tuner.py"
+VENDORED_ENGINE_SHA256 = "fbbf7631350c1ccc3142bbaf51c9ead9be3a3af06b5f41ef705cf7089a529a22"  # LF-normalised bytes
 
 
 def vendored_engine_sha256() -> str:
-    return hashlib.sha256((Path(__file__).parent / "_engine.py").read_bytes()).hexdigest()
+    """Hash of `_engine.py` with line endings normalised to LF (checkouts may use CRLF)."""
+    raw = (Path(__file__).parent / "_engine.py").read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(raw).hexdigest()
 
 
 __all__ = [

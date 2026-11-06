@@ -35,14 +35,24 @@ class ThompsonAdmission:
 
     name = "thompson-admission"
 
-    def __init__(self, prior: Mapping[str, tuple[float, float]] | None = None, seed: int = 0) -> None:
-        self.prior: dict[str, tuple[float, float]] = {k: (float(a), float(b)) for k, (a, b) in (prior or {}).items()}
+    def __init__(
+        self, prior: Mapping[str, tuple[float, float]] | None = None, seed: int = 0
+    ) -> None:
+        self.prior: dict[str, tuple[float, float]] = {
+            k: (float(a), float(b)) for k, (a, b) in (prior or {}).items()
+        }
         self.rng = random.Random(seed)
         self.samples = 0
 
     @classmethod
     def from_result(cls, result: ReplayResult, seed: int = 0) -> "ThompsonAdmission":
-        return cls({n: (1.0 + s.epochs_with_hit, 1.0 + s.epochs_without_hit) for n, s in result.per_shape.items()}, seed)
+        return cls(
+            {
+                n: (1.0 + s.epochs_with_hit, 1.0 + s.epochs_without_hit)
+                for n, s in result.per_shape.items()
+            },
+            seed,
+        )
 
     def posterior(self, sim: CacheSim, name: str) -> tuple[float, float]:
         a0, b0 = self.prior.get(name, (1.0, 1.0))
@@ -71,11 +81,29 @@ def lru_admission(sim: CacheSim, newcomer: str) -> str | None:
 
 def lfu_admission(sim: CacheSim, newcomer: str) -> str | None:
     residents = sim.resident()
-    return min(residents, key=lambda n: (sim.read_count.get(n, 0), sim.last_read.get(n, -1))) if residents else None
+    return (
+        min(
+            residents,
+            key=lambda n: (sim.read_count.get(n, 0), sim.last_read.get(n, -1)),
+        )
+        if residents
+        else None
+    )
 
 
-def run_capped(day: Day, materialized: frozenset[str], cap: int, admission: Any, label: str, fast: bool = False) -> ReplayResult:
-    return CacheSim(day, CacheConfig(materialized, None, "shape", cap, admission, label=label), fast=fast).run()
+def run_capped(
+    day: Day,
+    materialized: frozenset[str],
+    cap: int,
+    admission: Any,
+    label: str,
+    fast: bool = False,
+) -> ReplayResult:
+    return CacheSim(
+        day,
+        CacheConfig(materialized, None, "shape", cap, admission, label=label),
+        fast=fast,
+    ).run()
 
 
 class AdmissionPriorProposer:
@@ -87,8 +115,18 @@ class AdmissionPriorProposer:
         last: ReplayResult | None = context.get("last_result")
         if last is None:
             return []
-        prior = {n: [1.0 + s.epochs_with_hit, 1.0 + s.epochs_without_hit] for n, s in last.per_shape.items()}
-        return [Candidate("admission_prior", {"prior": prior, "cap": context["cap"]}, self.name, "posterior from the previous window")]
+        prior = {
+            n: [1.0 + s.epochs_with_hit, 1.0 + s.epochs_without_hit]
+            for n, s in last.per_shape.items()
+        }
+        return [
+            Candidate(
+                "admission_prior",
+                {"prior": prior, "cap": context["cap"]},
+                self.name,
+                "posterior from the previous window",
+            )
+        ]
 
 
 @dataclass
@@ -103,15 +141,56 @@ class AdmissionReplayEvaluator:
         day: Day = history["day"]
         materialized: frozenset[str] = history["materialized"]
         cap = int(candidate.payload["cap"])
-        prior = {k: (float(v[0]), float(v[1])) for k, v in candidate.payload["prior"].items()}
+        prior = {
+            k: (float(v[0]), float(v[1])) for k, v in candidate.payload["prior"].items()
+        }
         if day.reads < 100:
-            return Verdict("underdetermined", self.name, f"only {day.reads} recorded reads", {"reads": day.reads})
-        flat = run_capped(day, materialized, cap, ThompsonAdmission(None, self.seed), "flat", fast=True)
-        learned = run_capped(day, materialized, cap, ThompsonAdmission(prior, self.seed), "learned", fast=True)
+            return Verdict(
+                "underdetermined",
+                self.name,
+                f"only {day.reads} recorded reads",
+                {"reads": day.reads},
+            )
+        flat = run_capped(
+            day,
+            materialized,
+            cap,
+            ThompsonAdmission(None, self.seed),
+            "flat",
+            fast=True,
+        )
+        learned = run_capped(
+            day,
+            materialized,
+            cap,
+            ThompsonAdmission(prior, self.seed),
+            "learned",
+            fast=True,
+        )
         improvement = (flat.db_reads - learned.db_reads) / max(flat.db_reads, 1)
-        evidence = {"reads": day.reads, "db_reads_flat": flat.db_reads, "db_reads_learned": learned.db_reads, "improvement": improvement}
+        evidence = {
+            "reads": day.reads,
+            "db_reads_flat": flat.db_reads,
+            "db_reads_learned": learned.db_reads,
+            "improvement": improvement,
+        }
         if improvement >= self.min_improvement:
-            return Verdict("supported", self.name, f"db reads {flat.db_reads} -> {learned.db_reads}", evidence)
+            return Verdict(
+                "supported",
+                self.name,
+                f"db reads {flat.db_reads} -> {learned.db_reads}",
+                evidence,
+            )
         if improvement < 0:
-            return Verdict("refuted", self.name, f"db reads rise {flat.db_reads} -> {learned.db_reads}", evidence)
-        return Verdict("underdetermined", self.name, f"gain {improvement:.1%} below {self.min_improvement:.0%} resolution", evidence)
+            return Verdict(
+                "refuted",
+                self.name,
+                f"db reads rise {flat.db_reads} -> {learned.db_reads}",
+                evidence,
+            )
+        return Verdict(
+            "underdetermined",
+            self.name,
+            f"gain {improvement:.1%} below {self.min_improvement:.0%} resolution",
+            evidence,
+        )

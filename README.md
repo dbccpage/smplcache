@@ -179,6 +179,41 @@ and AVG rounding must still match the integration's declared semantics.
 See the [PR #7 review](docs/reviews/pr7_review.md) and the
 [SmplCache Live architecture & operations runbook](docs/demo/architecture_and_operations.md).
 
+### Self-tuning (`smplcache.tuning`): every adaptive behaviour, and its limits
+
+SmplCache tunes itself from its own receipts. Every change it proposes is
+tested on your recorded traffic and shown to you before it takes effect.
+Learned policies change only how much work SmplCache does: what to cache, how
+to partition, what to evict, what to precompute. They never decide whether a
+served value is correct; that stays with `certify_event`, and the replay
+harness checks every served value against a SQL oracle (0 mismatches on every
+reported run; the TTL baseline's stale serves are counted the same way).
+
+Each behaviour is off unless its `TuningFlags` field is set, and each one
+leaves hash-chained receipts (`ReceiptLog`) for proposal, evaluation,
+authorization, application, failure and learning. Nothing self-applies:
+a change reaches the store only after a `supported` replay verdict and an
+`approved` authorization from a declared `Policy` or a human; code changes
+are only ever proposed as pull requests. Results and verdicts are in
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md); the fault-injection table is in
+[docs/MUTATIONS.md](docs/MUTATIONS.md).
+
+| Flag | What it may change | Verdict | Limit |
+| --- | --- | --- | --- |
+| `spectral_partitioning` | how shapes are grouped into store partitions (only matters for stores that flush whole partitions) | drop | never beat per-relation grouping or the per-shape store on the benchmark; kept as code behind the flag for stores with coarse flush granularity |
+| `entropy_drift_detector` | when a repartition is *proposed* (von Neumann entropy of the co-invalidation density matrix over a sliding window) | flag | detects the workload phase change; the proposals it triggers were refuted by replay; diagnostic only, threshold must be > 0 bits |
+| `config_search` | which shapes are materialized (UCT search; greedy single-drop is the comparison) | flag | gain exists only under a declared memory cost per resident group; costs database reads; UCT does not beat greedy on the held-out segment |
+| `bandit_admission` | which shape is evicted when a shape cap is full (Thompson sampling on hit-per-epoch) | drop | a prior learned on one phase lost to LRU/LFU on the next; flat Thompson ties LFU |
+| `reread_suggestions` | nothing live: human-reviewed suggestions (REPLICA IDENTITY FULL, admit a shape) with counterfactual replay evidence | keep | every suggestion is `needs_human`; the extremum suggestion cannot be replayed and stays underdetermined |
+| `counterfactual_estimates` | nothing live: off-policy estimates of a capped admission policy from receipts | keep | exact only for policies that depend on reads and invalidations alone (LRU, LFU) |
+
+The replay harness (`smplcache.tuning.replay`) is a synthetic day (6,000
+writes, 2,000 reads, Zipf skew, one phase change, one table without
+before-images, one MIN/MAX shape outside the fragment). Its numbers describe
+that workload, not yours. p99 decision latency is wall-clock on a shared
+machine and varied 0.6-2.7 ms between runs of identical code. The mistake
+memory is exact-match and does not expire.
+
 ---
 
 ## Claim Discipline & Epistemic Audit

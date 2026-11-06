@@ -40,7 +40,9 @@ from smplcache.tuning.replay import CacheConfig, CacheSim, Day, benchmark_shapes
 
 def _require_numpy() -> None:
     if not HAS_NUMPY:
-        raise RuntimeError("smplcache.tuning.spectral needs numpy: pip install 'smplcache[matrix]'")
+        raise RuntimeError(
+            "smplcache.tuning.spectral needs numpy: pip install 'smplcache[matrix]'"
+        )
 
 
 def density_matrix(vectors: Iterable[frozenset[str]], names: Sequence[str]) -> Any:
@@ -129,9 +131,13 @@ def random_partition(names: Sequence[str], k: int, seed: int) -> dict[str, str]:
 class EntropyDriftDetector:
     """Von Neumann entropy of the co-invalidation density matrix over a sliding window."""
 
-    def __init__(self, names: Sequence[str], window: int = 400, threshold_bits: float = 0.3) -> None:
+    def __init__(
+        self, names: Sequence[str], window: int = 400, threshold_bits: float = 0.3
+    ) -> None:
         if threshold_bits <= 0:
-            raise ValueError("threshold_bits must be positive; 0 would propose a repartition on every window")
+            raise ValueError(
+                "threshold_bits must be positive; 0 would propose a repartition on every window"
+            )
         self.names = list(names)
         self.window = window
         self.threshold = threshold_bits
@@ -197,10 +203,23 @@ class PartitionReplayEvaluator:
         current: Mapping[str, str] = history["current_partition"]
         materialized: frozenset[str] = history["materialized"]
         if day.writes < self.min_writes:
-            return Verdict("underdetermined", self.name, f"only {day.writes} recorded writes", {"writes": day.writes})
+            return Verdict(
+                "underdetermined",
+                self.name,
+                f"only {day.writes} recorded writes",
+                {"writes": day.writes},
+            )
         proposed = candidate.payload["partition"]
-        before = CacheSim(day, CacheConfig(materialized, current, "partition", label="current"), fast=True).run()
-        after = CacheSim(day, CacheConfig(materialized, proposed, "partition", label="proposed"), fast=True).run()
+        before = CacheSim(
+            day,
+            CacheConfig(materialized, current, "partition", label="current"),
+            fast=True,
+        ).run()
+        after = CacheSim(
+            day,
+            CacheConfig(materialized, proposed, "partition", label="proposed"),
+            fast=True,
+        ).run()
         improvement = (before.rereads - after.rereads) / max(before.rereads, 1)
         evidence = {
             "writes": day.writes,
@@ -212,7 +231,22 @@ class PartitionReplayEvaluator:
             "improvement": improvement,
         }
         if improvement >= self.min_improvement:
-            return Verdict("supported", self.name, f"rereads {before.rereads} -> {after.rereads}", evidence)
+            return Verdict(
+                "supported",
+                self.name,
+                f"rereads {before.rereads} -> {after.rereads}",
+                evidence,
+            )
         if improvement < 0:
-            return Verdict("refuted", self.name, f"rereads rise {before.rereads} -> {after.rereads}", evidence)
-        return Verdict("underdetermined", self.name, f"gain {improvement:.1%} below {self.min_improvement:.0%} resolution", evidence)
+            return Verdict(
+                "refuted",
+                self.name,
+                f"rereads rise {before.rereads} -> {after.rereads}",
+                evidence,
+            )
+        return Verdict(
+            "underdetermined",
+            self.name,
+            f"gain {improvement:.1%} below {self.min_improvement:.0%} resolution",
+            evidence,
+        )

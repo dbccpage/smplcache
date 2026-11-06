@@ -32,7 +32,9 @@ from smplcache.tuning.replay import CacheConfig, CacheSim, Day, ReplayResult
 
 def reward(result: ReplayResult, uncached_db_reads: int, memory_cost: float) -> float:
     """Database reads saved against the uncached baseline minus the memory cost of resident groups."""
-    return (uncached_db_reads - result.db_reads) - memory_cost * result.mean_cached_groups
+    return (
+        uncached_db_reads - result.db_reads
+    ) - memory_cost * result.mean_cached_groups
 
 
 @dataclass
@@ -46,7 +48,9 @@ class Rollout:
         if materialized in self.cache:
             return self.cache[materialized]
         self.evaluations += 1
-        res = CacheSim(self.day, CacheConfig(materialized, label="rollout"), fast=True).run()
+        res = CacheSim(
+            self.day, CacheConfig(materialized, label="rollout"), fast=True
+        ).run()
         value = reward(res, self.day.reads, self.memory_cost)
         self.cache[materialized] = value
         return value
@@ -66,7 +70,9 @@ class Node:
 
 
 def actions(state: frozenset[str], universe: Sequence[str]) -> list[str]:
-    return [f"drop:{n}" for n in universe if n in state] + [f"add:{n}" for n in universe if n not in state]
+    return [f"drop:{n}" for n in universe if n in state] + [
+        f"add:{n}" for n in universe if n not in state
+    ]
 
 
 def step(state: frozenset[str], action: str) -> frozenset[str]:
@@ -103,22 +109,34 @@ def uct_search(
                 break
             a = max(
                 node.children,
-                key=lambda a: node.children[a].mean / scale + c * math.sqrt(math.log(node.visits + 1) / (node.children[a].visits + 1e-9)),
+                key=lambda a: node.children[a].mean / scale
+                + c
+                * math.sqrt(
+                    math.log(node.visits + 1) / (node.children[a].visits + 1e-9)
+                ),
             )
             node = node.children[a]
             d += 1
         value = rollout.score(node.state)
         if value > best_value:
             best_state, best_value = node.state, value
-        while node is not None:
-            node.visits += 1
-            node.total += value
-            node = node.parent
-    stats = {"budget": budget, "rollouts": rollout.evaluations, "root_children": len(root.children), "depth": depth}
+        walk: Node | None = node
+        while walk is not None:
+            walk.visits += 1
+            walk.total += value
+            walk = walk.parent
+    stats = {
+        "budget": budget,
+        "rollouts": rollout.evaluations,
+        "root_children": len(root.children),
+        "depth": depth,
+    }
     return best_state, best_value, stats
 
 
-def greedy_drop(start: frozenset[str], universe: Sequence[str], rollout: Rollout) -> tuple[frozenset[str], float]:
+def greedy_drop(
+    start: frozenset[str], universe: Sequence[str], rollout: Rollout
+) -> tuple[frozenset[str], float]:
     state, value = start, rollout.score(start)
     for name in universe:
         if name not in state:
@@ -135,7 +153,9 @@ class SearchProposer:
 
     name = "uct-config-proposer"
 
-    def __init__(self, budget: int = 40, memory_cost: float = 0.5, seed: int = 0) -> None:
+    def __init__(
+        self, budget: int = 40, memory_cost: float = 0.5, seed: int = 0
+    ) -> None:
         self.budget = budget
         self.memory_cost = memory_cost
         self.seed = seed
@@ -146,8 +166,14 @@ class SearchProposer:
         universe: Sequence[str] = context["universe"]
         current: frozenset[str] = frozenset(context["materialized"])
         rollout = Rollout(day, self.memory_cost)
-        best, value, stats = uct_search(current, universe, rollout, self.budget, seed=self.seed)
-        self.last_stats = {**stats, "search_reward": value, "start_reward": rollout.score(current)}
+        best, value, stats = uct_search(
+            current, universe, rollout, self.budget, seed=self.seed
+        )
+        self.last_stats = {
+            **stats,
+            "search_reward": value,
+            "start_reward": rollout.score(current),
+        }
         if best == current:
             return []
         return [
@@ -173,7 +199,12 @@ class HeldOutEvaluator:
         proposed = frozenset(candidate.payload["materialized"])
         memory_cost = float(candidate.payload["memory_cost"])
         if day.reads < 100:
-            return Verdict("underdetermined", self.name, f"only {day.reads} recorded reads", {"reads": day.reads})
+            return Verdict(
+                "underdetermined",
+                self.name,
+                f"only {day.reads} recorded reads",
+                {"reads": day.reads},
+            )
         before = CacheSim(day, CacheConfig(current, label="current"), fast=True).run()
         after = CacheSim(day, CacheConfig(proposed, label="proposed"), fast=True).run()
         r_before = reward(before, day.reads, memory_cost)
@@ -190,13 +221,30 @@ class HeldOutEvaluator:
             "improvement": improvement,
         }
         if improvement >= self.min_improvement:
-            return Verdict("supported", self.name, f"held-out reward {r_before:.1f} -> {r_after:.1f}", evidence)
+            return Verdict(
+                "supported",
+                self.name,
+                f"held-out reward {r_before:.1f} -> {r_after:.1f}",
+                evidence,
+            )
         if improvement < 0:
-            return Verdict("refuted", self.name, f"held-out reward falls {r_before:.1f} -> {r_after:.1f}", evidence)
-        return Verdict("underdetermined", self.name, f"gain {improvement:.1%} below {self.min_improvement:.0%} resolution", evidence)
+            return Verdict(
+                "refuted",
+                self.name,
+                f"held-out reward falls {r_before:.1f} -> {r_after:.1f}",
+                evidence,
+            )
+        return Verdict(
+            "underdetermined",
+            self.name,
+            f"gain {improvement:.1%} below {self.min_improvement:.0%} resolution",
+            evidence,
+        )
 
 
-def audit_config_receipts(log: ReceiptLog, held_out: Day, current: frozenset[str]) -> list[dict[str, Any]]:
+def audit_config_receipts(
+    log: ReceiptLog, held_out: Day, current: frozenset[str]
+) -> list[dict[str, Any]]:
     """Recount every ``evaluated`` materialize_set receipt directly with CacheSim.
 
     Independent of `HeldOutEvaluator`: it re-derives database reads before and
@@ -206,22 +254,43 @@ def audit_config_receipts(log: ReceiptLog, held_out: Day, current: frozenset[str
     log.require_intact()
     problems: list[dict[str, Any]] = []
     for receipt in log:
-        if receipt.step != "evaluated" or receipt.body.get("candidate", {}).get("kind") != "materialize_set":
+        if (
+            receipt.step != "evaluated"
+            or receipt.body.get("candidate", {}).get("kind") != "materialize_set"
+        ):
             continue
         verdict = receipt.body["verdict"]
         evidence = verdict.get("evidence", {})
         proposed = frozenset(receipt.body["candidate"]["payload"]["materialized"])
-        memory_cost = float(receipt.body["candidate"]["payload"].get("memory_cost", 0.0))
-        before = CacheSim(held_out, CacheConfig(current, label="audit-before"), fast=True).run()
-        after = CacheSim(held_out, CacheConfig(proposed, label="audit-after"), fast=True).run()
+        memory_cost = float(
+            receipt.body["candidate"]["payload"].get("memory_cost", 0.0)
+        )
+        before = CacheSim(
+            held_out, CacheConfig(current, label="audit-before"), fast=True
+        ).run()
+        after = CacheSim(
+            held_out, CacheConfig(proposed, label="audit-after"), fast=True
+        ).run()
         r_before = reward(before, held_out.reads, memory_cost)
         r_after = reward(after, held_out.reads, memory_cost)
         improvement = (r_after - r_before) / max(abs(r_before), 1.0)
-        expected = "supported" if improvement >= HeldOutEvaluator.min_improvement else ("refuted" if improvement < 0 else "underdetermined")
+        expected = (
+            "supported"
+            if improvement >= HeldOutEvaluator.min_improvement
+            else ("refuted" if improvement < 0 else "underdetermined")
+        )
         claimed = (evidence.get("db_reads_before"), evidence.get("db_reads_after"))
-        if claimed != (before.db_reads, after.db_reads) or expected != verdict["status"]:
+        if (
+            claimed != (before.db_reads, after.db_reads)
+            or expected != verdict["status"]
+        ):
             problems.append(
-                {"seq": receipt.seq, "claimed_db_reads": claimed, "recount_db_reads": (before.db_reads, after.db_reads),
-                 "claimed_status": verdict["status"], "recount_status": expected}
+                {
+                    "seq": receipt.seq,
+                    "claimed_db_reads": claimed,
+                    "recount_db_reads": (before.db_reads, after.db_reads),
+                    "claimed_status": verdict["status"],
+                    "recount_status": expected,
+                }
             )
     return problems
