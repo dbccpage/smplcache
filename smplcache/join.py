@@ -224,44 +224,75 @@ class MultiTableJoinShape:
             if self.qualifier_to_relation(q) == target_rel
         )
 
-    def table_fingerprint(self, relation: str) -> frozenset[str]:
+    def table_dependency_set(self, relation: str) -> dict[str, frozenset[str]]:
         """
-        Return all columns of `relation` that the join query result depends on
-        (including join keys, aggregate columns, group keys, predicate columns,
-        projected columns, and security columns).
+        Decompose `relation`'s dependency columns in this query into:
+        - `read_cols`: aggregate argument and projected columns
+        - `join_keys`: equijoin columns on either side of `JOIN ... ON`
+        - `filter_cols`: `WHERE` predicate columns
+        - `group_cols`: `GROUP BY` columns
+        - `security_cols`: row-level security columns
         """
         target_rel = normalize_relation(relation)
-        cols: set[str] = set()
+        read_cols: set[str] = set()
+        join_keys: set[str] = set()
+        filter_cols: set[str] = set()
+        group_cols: set[str] = set()
+        security_cols: set[str] = set()
 
         for j in self.joins:
             if self.qualifier_to_relation(j.left_qualifier) == target_rel:
-                cols.add(j.left_key.lower())
+                join_keys.add(j.left_key.lower())
             if normalize_relation(j.right_relation) == target_rel:
-                cols.add(j.right_key.lower())
+                join_keys.add(j.right_key.lower())
 
         if (
             self.agg_col is not None
             and self.qualifier_to_relation(self.agg_col[0]) == target_rel
         ):
-            cols.add(self.agg_col[1].lower())
-
-        for q, c in self.group_cols:
-            if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
-
-        for q, c, _, _ in self.predicate_terms:
-            if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
+            read_cols.add(self.agg_col[1].lower())
 
         for q, c in self.projection_cols:
             if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
+                read_cols.add(c.lower())
+
+        for q, c in self.group_cols:
+            if self.qualifier_to_relation(q) == target_rel:
+                group_cols.add(c.lower())
+
+        for q, c, _, _ in self.predicate_terms:
+            if self.qualifier_to_relation(q) == target_rel:
+                filter_cols.add(c.lower())
 
         for q, c in self.security_cols:
             if self.qualifier_to_relation(q) == target_rel:
-                cols.add(c.lower())
+                security_cols.add(c.lower())
 
-        return frozenset(cols)
+        return {
+            "read_cols": frozenset(read_cols),
+            "join_keys": frozenset(join_keys),
+            "filter_cols": frozenset(filter_cols),
+            "group_cols": frozenset(group_cols),
+            "security_cols": frozenset(security_cols),
+        }
+
+    def dependency_set(self) -> dict[str, dict[str, frozenset[str]]]:
+        """Return the structured dependency set for every participating table."""
+        return {rel: self.table_dependency_set(rel) for rel in sorted(self.relations())}
+
+    def table_fingerprint(self, relation: str) -> frozenset[str]:
+        """
+        Return all columns of `relation` that the join query result depends on,
+        derived directly from `table_dependency_set(relation)`.
+        """
+        deps = self.table_dependency_set(relation)
+        return (
+            deps["read_cols"]
+            | deps["join_keys"]
+            | deps["filter_cols"]
+            | deps["group_cols"]
+            | deps["security_cols"]
+        )
 
     def table_required_evidence(
         self, relation: str, pk_col: str = "id"
@@ -317,12 +348,18 @@ class JoinAuxState:
     table_rows: dict[str, dict[Any, dict[str, Any]]] = field(default_factory=dict)
     # Maps (child_relation, child_fk_col) -> {normalized_fk_val -> set of child PKs}
     fk_index: dict[tuple[str, str], dict[Any, set[Any]]] = field(default_factory=dict)
+    # Maps (right_relation, non_pk_join_col) -> {normalized_val -> set of right PKs}
+    secondary_join_index: dict[tuple[str, str], dict[Any, set[Any]]] = field(
+        default_factory=dict
+    )
     is_invalidated: bool = False
     max_total_rows: int | None = None
     max_rows_per_table: Mapping[str, int] | int | None = None
     max_fk_fanout: int | None = None
+    max_tombstones: int | None = None
     evicted_pks: dict[str, set[Any]] = field(default_factory=dict)
     evicted_fk_buckets: dict[tuple[str, str], set[Any]] = field(default_factory=dict)
+    tombstone_overflowed: bool = field(default=False, init=False)
     eviction_policy: EvictionPolicy = "fifo"
     lfu_decay_window: int | None = None
     lfu_decay_factor: float = 0.5
@@ -378,6 +415,8 @@ class JoinAuxState:
             raise ValueError(
                 f"adapt_epoch_size must be >= 1, got {self.adapt_epoch_size}"
             )
+        if self.max_tombstones is not None and self.max_tombstones < 0:
+            raise ValueError(f"max_tombstones must be >= 0, got {self.max_tombstones}")
         if self.eviction_policy in ("w_lfu", "wtinylfu") and (
             self.lfu_decay_window is None
         ):
@@ -403,6 +442,21 @@ class JoinAuxState:
                 l_key = j.left_key.lower()
                 self.fk_index.setdefault((l_rel, l_key), {})
                 self.evicted_fk_buckets.setdefault((l_rel, l_key), set())
+                r_rel = normalize_relation(j.right_relation)
+                r_key = j.right_key.lower()
+                if r_key != self.pk_col_for(r_rel):
+                    self.secondary_join_index.setdefault((r_rel, r_key), {})
+        for raw_rel, rows_map in list(self.table_rows.items()):
+            norm_rel = normalize_relation(raw_rel)
+            if not rows_map:
+                continue
+            normalized_rows: dict[Any, dict[str, Any]] = {}
+            for raw_pk, row in rows_map.items():
+                lower_row = {str(k).lower(): v for k, v in row.items()}
+                norm_pk = _normalize_group_atom(raw_pk)
+                normalized_rows[norm_pk] = lower_row
+                self._index_row_fks(norm_rel, norm_pk, lower_row)
+            self.table_rows[norm_rel] = normalized_rows
 
     def all_shapes(self) -> tuple[MultiTableJoinShape, ...]:
         """Return `(self.shape, *self.extra_shapes)` managed by this auxiliary state."""
@@ -828,6 +882,16 @@ class JoinAuxState:
     def total_rows(self) -> int:
         return sum(len(rows) for rows in self.table_rows.values())
 
+    def total_tombstones(self) -> int:
+        return sum(len(pks) for pks in self.evicted_pks.values())
+
+    def is_pk_evicted(self, relation: str, pk_val: Any) -> bool:
+        if self.tombstone_overflowed:
+            return True
+        rel = normalize_relation(relation)
+        norm_pk = _normalize_group_atom(pk_val)
+        return norm_pk in self.evicted_pks.get(rel, set())
+
     def max_rows_for(self, relation: str) -> int | None:
         rel = normalize_relation(relation)
         if isinstance(self.max_rows_per_table, int):
@@ -838,15 +902,27 @@ class JoinAuxState:
                     return int(v)
         return None
 
+    def _record_tombstone(self, rel: str, norm_pk: Any) -> None:
+        ev_set = self.evicted_pks.setdefault(rel, set())
+        if norm_pk not in ev_set:
+            if (
+                self.max_tombstones is not None
+                and self.total_tombstones() >= self.max_tombstones
+            ):
+                self.tombstone_overflowed = True
+            else:
+                ev_set.add(norm_pk)
+
     def evict_row(self, relation: str, pk_val: Any) -> bool:
         """
         Evict `pk_val` from `table_rows[relation]`, recording the eviction in
-        `evicted_pks[relation]` and tainting any foreign-key bucket in
-        `evicted_fk_buckets` that referenced `pk_val`.
+        `evicted_pks[relation]` (up to `max_tombstones`, latching
+        `tombstone_overflowed = True` if exceeded) and tainting any foreign-key
+        bucket in `evicted_fk_buckets` that referenced `pk_val`.
         """
         rel = normalize_relation(relation)
         norm_pk = _normalize_group_atom(pk_val)
-        self.evicted_pks.setdefault(rel, set()).add(norm_pk)
+        self._record_tombstone(rel, norm_pk)
         if rel in self._row_last_access:
             self._row_last_access[rel].pop(norm_pk, None)
         if rel in self._row_access_freq:
@@ -917,6 +993,7 @@ class JoinAuxState:
         max_total_rows: int | None = None,
         max_rows_per_table: Mapping[str, int] | int | None = None,
         max_fk_fanout: int | None = None,
+        max_tombstones: int | None = None,
         prior_state: JoinAuxState | None = None,
     ) -> JoinAuxState:
         pk_map = (
@@ -938,6 +1015,7 @@ class JoinAuxState:
             max_total_rows=max_total_rows,
             max_rows_per_table=max_rows_per_table,
             max_fk_fanout=max_fk_fanout,
+            max_tombstones=max_tombstones,
         )
         for seed_shape in state.all_shapes():
             for join in seed_shape.joins:
@@ -1049,6 +1127,20 @@ class JoinAuxState:
                 state._enforce_capacity_bounds(rel)
         return state
 
+    def _ensure_secondary_join_index(self, rel: str, col: str) -> dict[Any, set[Any]]:
+        norm_rel = normalize_relation(rel)
+        norm_col = col.lower()
+        key = (norm_rel, norm_col)
+        if key not in self.secondary_join_index:
+            sec_map: dict[Any, set[Any]] = {}
+            for pk_val, row in self.table_rows.get(norm_rel, {}).items():
+                raw_v = row.get(norm_col)
+                if raw_v is not None:
+                    norm_v = _normalize_group_atom(raw_v)
+                    sec_map.setdefault(norm_v, set()).add(pk_val)
+            self.secondary_join_index[key] = sec_map
+        return self.secondary_join_index[key]
+
     def _index_row_fks(
         self, rel: str, pk_val: Any, lower_row: Mapping[str, Any]
     ) -> None:
@@ -1057,6 +1149,10 @@ class JoinAuxState:
                 raw_fk = lower_row.get(fk_col)
                 if raw_fk is not None:
                     norm_fk = _normalize_group_atom(raw_fk)
+                    try:
+                        hash(norm_fk)
+                    except TypeError:
+                        continue
                     if norm_fk in self.evicted_fk_buckets.get(
                         (child_rel, fk_col), set()
                     ):
@@ -1070,6 +1166,16 @@ class JoinAuxState:
                         self.evict_fk_bucket(child_rel, fk_col, norm_fk)
                     else:
                         pks.add(pk_val)
+        for (dim_rel, join_col), sec_map in self.secondary_join_index.items():
+            if dim_rel == rel:
+                raw_val = lower_row.get(join_col)
+                if raw_val is not None:
+                    norm_val = _normalize_group_atom(raw_val)
+                    try:
+                        hash(norm_val)
+                    except TypeError:
+                        continue
+                    sec_map.setdefault(norm_val, set()).add(pk_val)
 
     def _unindex_row_fks(
         self, rel: str, pk_val: Any, lower_row: Mapping[str, Any]
@@ -1079,11 +1185,29 @@ class JoinAuxState:
                 raw_fk = lower_row.get(fk_col)
                 if raw_fk is not None:
                     norm_fk = _normalize_group_atom(raw_fk)
+                    try:
+                        hash(norm_fk)
+                    except TypeError:
+                        continue
                     pks = bucket_map.get(norm_fk)
                     if pks is not None:
                         pks.discard(pk_val)
                         if not pks:
                             bucket_map.pop(norm_fk, None)
+        for (dim_rel, join_col), sec_map in self.secondary_join_index.items():
+            if dim_rel == rel:
+                raw_val = lower_row.get(join_col)
+                if raw_val is not None:
+                    norm_val = _normalize_group_atom(raw_val)
+                    try:
+                        hash(norm_val)
+                    except TypeError:
+                        continue
+                    pks = sec_map.get(norm_val)
+                    if pks is not None:
+                        pks.discard(pk_val)
+                        if not pks:
+                            sec_map.pop(norm_val, None)
 
     def join_multiplicity(
         self,
@@ -1119,6 +1243,7 @@ class JoinAuxState:
         *,
         record_access: bool = True,
         shape: MultiTableJoinShape | None = None,
+        accessed_log: list[tuple[str, Any]] | None = None,
     ) -> set[Any]:
         """
         Resolve the set of base fact row PKs that join with any of `dim_key_vals`
@@ -1136,6 +1261,8 @@ class JoinAuxState:
         }
         if not norm_keys:
             return set()
+        if self.tombstone_overflowed:
+            raise _EvictedJoinKeyError("Tombstone capacity overflowed")
 
         touched_keys_by_rel: dict[str, set[Any]] = {target_dim: set(norm_keys)}
         changed = True
@@ -1179,6 +1306,8 @@ class JoinAuxState:
                             )
                         if record_access:
                             self.record_access(l_rel, child_pk)
+                        if accessed_log is not None:
+                            accessed_log.append((l_rel, child_pk))
                         l_pks.add(child_pk)
 
                 prev_l = touched_keys_by_rel.setdefault(l_rel, set())
@@ -1197,6 +1326,7 @@ class JoinAuxState:
         override_upserted_row: tuple[Any, dict[str, Any]] | None = None,
         shape: MultiTableJoinShape | None = None,
         record_access: bool = True,
+        accessed_log: list[tuple[str, Any]] | None = None,
     ) -> list[tuple[Any, Decimal, int]]:
         """
         Evaluate a single base fact row against the current dimension tables in
@@ -1205,14 +1335,19 @@ class JoinAuxState:
         for each resulting composite joined row that satisfies `shape.predicate_terms`.
         Raises `_EvictedJoinKeyError` if a referenced dimension key was evicted.
         """
+        if self.tombstone_overflowed:
+            raise _EvictedJoinKeyError("Tombstone capacity overflowed")
         eff_shape = shape or self.shape
         base_rel = normalize_relation(eff_shape.base_relation)
         base_qual = eff_shape.effective_base_qualifier
         lower_fact = {str(k).lower(): v for k, v in fact_row.items()}
         base_pk_col = self.pk_col_for(base_rel)
         base_pk = lower_fact.get(base_pk_col)
-        if base_pk is not None and record_access:
-            self.record_access(base_rel, base_pk)
+        if base_pk is not None:
+            if record_access:
+                self.record_access(base_rel, base_pk)
+            if accessed_log is not None:
+                accessed_log.append((base_rel, base_pk))
 
         composite_envs: list[dict[str, dict[str, Any]]] = [
             {base_rel: lower_fact, base_qual: lower_fact}
@@ -1241,19 +1376,41 @@ class JoinAuxState:
                             raise _EvictedJoinKeyError(
                                 f"Dimension key {norm_l_val} in {r_rel} was evicted"
                             )
-                    elif ev_dim_pks:
-                        raise _EvictedJoinKeyError(
-                            f"Relation {r_rel} has evicted rows during non-PK scan"
-                        )
-
-                    if r_key == r_pk_col and override_rel != r_rel:
-                        cand = dim_map.get(norm_l_val)
-                        if cand is not None:
-                            if record_access:
-                                self.record_access(r_rel, norm_l_val)
-                            matched_dim_rows.append(cand)
+                        if override_rel == r_rel:
+                            if override_upserted_row is not None and _values_equal(
+                                norm_l_val, override_upserted_row[0]
+                            ):
+                                u_row = override_upserted_row[1]
+                                u_val = u_row.get(r_key)
+                                if u_val is not None and _values_equal(l_val, u_val):
+                                    matched_dim_rows.append(u_row)
+                            elif override_removed_pk is not None and _values_equal(
+                                norm_l_val, override_removed_pk
+                            ):
+                                pass
+                            else:
+                                cand = dim_map.get(norm_l_val)
+                                if cand is not None:
+                                    if record_access:
+                                        self.record_access(r_rel, norm_l_val)
+                                    if accessed_log is not None:
+                                        accessed_log.append((r_rel, norm_l_val))
+                                    matched_dim_rows.append(cand)
+                        else:
+                            cand = dim_map.get(norm_l_val)
+                            if cand is not None:
+                                if record_access:
+                                    self.record_access(r_rel, norm_l_val)
+                                if accessed_log is not None:
+                                    accessed_log.append((r_rel, norm_l_val))
+                                matched_dim_rows.append(cand)
                     else:
-                        for d_pk, d_row in dim_map.items():
+                        if ev_dim_pks:
+                            raise _EvictedJoinKeyError(
+                                f"Relation {r_rel} has evicted rows during non-PK scan"
+                            )
+                        sec_map = self._ensure_secondary_join_index(r_rel, r_key)
+                        for d_pk in sorted(sec_map.get(norm_l_val, set()), key=str):
                             if (
                                 override_rel == r_rel
                                 and override_removed_pk is not None
@@ -1266,11 +1423,15 @@ class JoinAuxState:
                                 and _values_equal(d_pk, override_upserted_row[0])
                             ):
                                 continue
-                            r_val = d_row.get(r_key)
-                            if r_val is not None and _values_equal(l_val, r_val):
-                                if record_access:
-                                    self.record_access(r_rel, d_pk)
-                                matched_dim_rows.append(d_row)
+                            d_row = dim_map.get(d_pk)
+                            if d_row is not None:
+                                r_val = d_row.get(r_key)
+                                if r_val is not None and _values_equal(l_val, r_val):
+                                    if record_access:
+                                        self.record_access(r_rel, d_pk)
+                                    if accessed_log is not None:
+                                        accessed_log.append((r_rel, d_pk))
+                                    matched_dim_rows.append(d_row)
 
                         if override_rel == r_rel and override_upserted_row is not None:
                             u_row = override_upserted_row[1]
@@ -1357,6 +1518,8 @@ class JoinAuxState:
 
         if op == "INSERT":
             pk_val = _normalize_group_atom(new_map.get(pk_col))
+            if self.is_pk_evicted(rel, pk_val):
+                return
             tbl[pk_val] = dict(new_map)
             self._record_insertion(rel, pk_val)
             self._index_row_fks(rel, pk_val, new_map)
@@ -1375,6 +1538,16 @@ class JoinAuxState:
         elif op == "UPDATE":
             old_pk = _normalize_group_atom(old_map.get(pk_col, new_map.get(pk_col)))
             new_pk = _normalize_group_atom(new_map.get(pk_col, old_map.get(pk_col)))
+            if (
+                self.is_pk_evicted(rel, old_pk)
+                or self.is_pk_evicted(rel, new_pk)
+                or old_pk not in tbl
+            ):
+                if self.is_pk_evicted(rel, old_pk) and not _values_equal(
+                    old_pk, new_pk
+                ):
+                    self._record_tombstone(rel, new_pk)
+                return
             existing = tbl.pop(old_pk, old_map)
             self._unindex_row_fks(rel, old_pk, existing)
             if not _values_equal(old_pk, new_pk):
@@ -1392,11 +1565,62 @@ class JoinAuxState:
             self.record_access(rel, new_pk)
             self._enforce_capacity_bounds(rel)
 
+    def apply_disjoint_update(
+        self,
+        relation: str,
+        old_map: dict[str, Any],
+        new_map: dict[str, Any],
+    ) -> None:
+        """
+        Update a resident row in `table_rows` on a `disjoint_columns` `UPDATE`
+        without resurrecting evicted primary keys or perturbing W-TinyLFU access
+        recency/frequency counters, while keeping `fk_index` and
+        `secondary_join_index` synchronized.
+        """
+        rel = normalize_relation(relation)
+        if rel not in self.all_relations():
+            return
+        pk_col = self.pk_col_for(rel)
+        if pk_col not in old_map and pk_col not in new_map:
+            return
+        tbl = self.table_rows.setdefault(rel, {})
+        old_pk = _normalize_group_atom(old_map.get(pk_col, new_map.get(pk_col)))
+        new_pk = _normalize_group_atom(new_map.get(pk_col, old_map.get(pk_col)))
+        if (
+            self.is_pk_evicted(rel, old_pk)
+            or self.is_pk_evicted(rel, new_pk)
+            or old_pk not in tbl
+        ):
+            if self.is_pk_evicted(rel, old_pk) and not _values_equal(old_pk, new_pk):
+                self._record_tombstone(rel, new_pk)
+            return
+        existing = tbl.pop(old_pk, old_map)
+        self._unindex_row_fks(rel, old_pk, existing)
+        if not _values_equal(old_pk, new_pk):
+            if rel in self._row_last_access and old_pk in self._row_last_access[rel]:
+                self._row_last_access[rel][new_pk] = self._row_last_access[rel].pop(
+                    old_pk
+                )
+            if rel in self._row_access_freq and old_pk in self._row_access_freq[rel]:
+                self._row_access_freq[rel][new_pk] = self._row_access_freq[rel].pop(
+                    old_pk
+                )
+            if rel in self._row_inserted_at and old_pk in self._row_inserted_at[rel]:
+                self._row_inserted_at[rel][new_pk] = self._row_inserted_at[rel].pop(
+                    old_pk
+                )
+        merged = dict(existing)
+        merged.update(new_map)
+        tbl[new_pk] = merged
+        self._index_row_fks(rel, new_pk, merged)
+
 
 def rebuild_join_cache(
     shape: MultiTableJoinShape,
     tables: Mapping[str, Sequence[Mapping[str, Any]]],
     primary_keys: Mapping[str, str] | None = None,
+    *,
+    aux_state: JoinAuxState | None = None,
 ) -> AggregateCache:
     """
     Build an `AggregateCache` (with full `_group_state` `(sum, non_null_count, row_count)`)
@@ -1407,14 +1631,27 @@ def rebuild_join_cache(
     if shape.agg_fn is None:
         return cache
 
-    aux = JoinAuxState.from_tables(shape, tables, primary_keys=primary_keys)
+    can_reuse_aux = (
+        aux_state is not None
+        and not aux_state.tombstone_overflowed
+        and all(not s for s in aux_state.evicted_pks.values())
+        and all(not s for s in aux_state.evicted_fk_buckets.values())
+        and shape.relations() <= aux_state.all_relations()
+    )
+    aux = (
+        aux_state
+        if can_reuse_aux and aux_state is not None
+        else JoinAuxState.from_tables(shape, tables, primary_keys=primary_keys)
+    )
     is_grouped = len(shape.group_cols) > 0
     if not is_grouped:
         cache._group_state[()] = (Decimal(0), 0, 0)
 
     base_rel = normalize_relation(shape.base_relation)
     for fact_row in aux.table_rows.get(base_rel, {}).values():
-        contribs = aux.evaluate_fact_row_contributions(fact_row, shape=shape)
+        contribs = aux.evaluate_fact_row_contributions(
+            fact_row, shape=shape, record_access=False
+        )
         for g_key, s_delta, n_delta in contribs:
             s_cur, n_cur, r_cur = cache._group_state.get(g_key, (Decimal(0), 0, 0))
             cache._group_state[g_key] = (
@@ -1437,6 +1674,7 @@ def _compute_join_event_deltas(
     aux_state: JoinAuxState,
     *,
     record_access: bool = True,
+    accessed_log: list[tuple[str, Any]] | None = None,
 ) -> tuple[
     list[tuple[Any, Decimal, int]],
     list[tuple[Any, Decimal, int]],
@@ -1450,14 +1688,20 @@ def _compute_join_event_deltas(
     if event_rel == base_rel:
         old_contribs = (
             aux_state.evaluate_fact_row_contributions(
-                old_map, shape=shape, record_access=record_access
+                old_map,
+                shape=shape,
+                record_access=record_access,
+                accessed_log=accessed_log,
             )
             if op in ("UPDATE", "DELETE")
             else []
         )
         new_contribs = (
             aux_state.evaluate_fact_row_contributions(
-                new_map, shape=shape, record_access=record_access
+                new_map,
+                shape=shape,
+                record_access=record_access,
+                accessed_log=accessed_log,
             )
             if op in ("UPDATE", "INSERT")
             else []
@@ -1486,7 +1730,11 @@ def _compute_join_event_deltas(
                 touched_join_keys.add(_normalize_group_atom(new_map.get(rk)))
 
     affected_fact_pks = aux_state.get_referencing_fact_pks(
-        event_rel, touched_join_keys, record_access=record_access, shape=shape
+        event_rel,
+        touched_join_keys,
+        record_access=record_access,
+        shape=shape,
+        accessed_log=accessed_log,
     )
     if not affected_fact_pks:
         return [], [], 0
@@ -1496,14 +1744,17 @@ def _compute_join_event_deltas(
     fact_table = aux_state.table_rows.get(base_rel, {})
 
     for f_pk in affected_fact_pks:
-        if f_pk in aux_state.evicted_pks.get(base_rel, set()):
+        if aux_state.is_pk_evicted(base_rel, f_pk):
             raise _EvictedJoinKeyError(f"Fact row {f_pk} was evicted")
         f_row = fact_table.get(f_pk)
         if f_row is None:
             raise _EvictedJoinKeyError(f"Fact row {f_pk} missing from aux_state")
         old_contribs_all.extend(
             aux_state.evaluate_fact_row_contributions(
-                f_row, shape=shape, record_access=record_access
+                f_row,
+                shape=shape,
+                record_access=record_access,
+                accessed_log=accessed_log,
             )
         )
         new_contribs_all.extend(
@@ -1516,6 +1767,7 @@ def _compute_join_event_deltas(
                 ),
                 shape=shape,
                 record_access=record_access,
+                accessed_log=accessed_log,
             )
         )
 
@@ -1534,12 +1786,16 @@ def certify_join_event(
     keys or overflowed fanout buckets to `invalidate("evicted_join_auxiliary_key")`.
     """
     event_rel = normalize_relation(event.relation)
+    b_clock = event.boundary_clock or (
+        str(event.event_id) if event.event_id is not None else None
+    )
     cert = Certificate(
         shape=shape.name,
         event_id=str(event.event_id),
         relation=event_rel or event.relation,
         decision_kind=DecisionKind.PRESERVE,
         reason_code="",
+        boundary_clock=b_clock,
     )
 
     if not shape.is_supported:
@@ -1750,15 +2006,16 @@ def certify_join_event(
         cert.available_evidence = []
         return Decision.invalidate("missing_evidence_for_repair", cert)
 
-    # Check if target row PK was evicted from JoinAuxState
-    ev_rel_pks = aux_state.evicted_pks.get(event_rel, set())
+    # Check if target row PK was evicted from JoinAuxState or tombstones overflowed
+    if aux_state.tombstone_overflowed:
+        return Decision.invalidate("evicted_join_auxiliary_key", cert)
     if op in ("UPDATE", "DELETE"):
         old_pk = _normalize_group_atom(old_map.get(pk_col))
-        if old_pk in ev_rel_pks:
+        if aux_state.is_pk_evicted(event_rel, old_pk):
             return Decision.invalidate("evicted_join_auxiliary_key", cert)
     if op in ("UPDATE", "INSERT"):
         new_pk = _normalize_group_atom(new_map.get(pk_col))
-        if new_pk in ev_rel_pks:
+        if aux_state.is_pk_evicted(event_rel, new_pk):
             return Decision.invalidate("evicted_join_auxiliary_key", cert)
 
     rel_limit = aux_state.max_rows_for(event_rel)
@@ -1782,14 +2039,28 @@ def certify_join_event(
         if new_pk in rel_store:
             return Decision.invalidate("stale_join_auxiliary_state", cert)
 
+    accessed_log: list[tuple[str, Any]] = []
     try:
         old_contribs, new_contribs, matched_facts = _compute_join_event_deltas(
-            shape, event_rel, op, old_map, new_map, aux_state, record_access=False
+            shape,
+            event_rel,
+            op,
+            old_map,
+            new_map,
+            aux_state,
+            record_access=False,
+            accessed_log=accessed_log,
         )
     except _EvictedJoinKeyError:
         return Decision.invalidate("evicted_join_auxiliary_key", cert)
     except (TypeError, ValueError, InvalidOperation):
         return Decision.invalidate("invalid_evidence_type", cert)
+
+    setattr(
+        cert,
+        "_precomputed_deltas",
+        (old_contribs, new_contribs, matched_facts, accessed_log),
+    )
 
     base_rel = normalize_relation(shape.base_relation)
     if event_rel != base_rel and matched_facts == 0:
@@ -1809,6 +2080,19 @@ def certify_join_event(
         for s_d, n_d, r_d in group_deltas.values()
     )
 
+    rel_join_keys = shape.table_dependency_set(event_rel)["join_keys"]
+    join_key_changed = op == "UPDATE" and any(
+        not _values_equal(old_map.get(jk), new_map.get(jk)) for jk in rel_join_keys
+    )
+
+    if event_rel == base_rel and join_key_changed:
+        cert.repair_program = f"join_{shape.agg_fn}_by_group"
+        return Decision.repair("foreign_key_reparent", cert)
+
+    if event_rel != base_rel and join_key_changed and matched_facts > 0:
+        cert.repair_program = f"join_{shape.agg_fn}_by_group"
+        return Decision.repair("dimension_update", cert)
+
     if op == "UPDATE" and not has_nonzero_delta:
         return Decision.preserve("noop_update", cert)
 
@@ -1822,13 +2106,6 @@ def certify_join_event(
             return Decision.repair("insert", cert)
         if op == "DELETE":
             return Decision.repair("delete", cert)
-        fk_cols = {
-            j.left_key.lower()
-            for j in shape.joins
-            if shape.qualifier_to_relation(j.left_qualifier) == base_rel
-        }
-        if any(not _values_equal(old_map.get(fk), new_map.get(fk)) for fk in fk_cols):
-            return Decision.repair("foreign_key_reparent", cert)
         if not old_contribs and new_contribs:
             return Decision.repair("predicate_entry", cert)
         if old_contribs and not new_contribs:
@@ -1918,6 +2195,10 @@ def process_join_event(
 
     if decision.kind == DecisionKind.PRESERVE:
         pk_col = aux_state.pk_col_for(event_rel)
+        if decision.reason == "disjoint_columns":
+            if op == "UPDATE" and (pk_col in old_map or pk_col in new_map):
+                aux_state.apply_disjoint_update(event_rel, old_map, new_map)
+            return decision
         if (
             (op == "INSERT" and pk_col in new_map)
             or (op == "DELETE" and pk_col in old_map)
@@ -1927,9 +2208,15 @@ def process_join_event(
         return decision
 
     try:
-        old_contribs, new_contribs, _ = _compute_join_event_deltas(
-            shape, event_rel, op, old_map, new_map, aux_state
-        )
+        precomputed = getattr(decision.certificate, "_precomputed_deltas", None)
+        if precomputed is not None:
+            old_contribs, new_contribs, _, accessed_log = precomputed
+            for acc_rel, acc_pk in accessed_log:
+                aux_state.record_access(acc_rel, acc_pk)
+        else:
+            old_contribs, new_contribs, _ = _compute_join_event_deltas(
+                shape, event_rel, op, old_map, new_map, aux_state
+            )
         _apply_contribs_to_cache(shape, cache, old_contribs, new_contribs)
         aux_state.apply_row_mutation(event_rel, op, old_map, new_map)
     except _EvictedJoinKeyError:
@@ -1962,6 +2249,7 @@ class JoinCacheManager:
         max_total_rows: int | None = None,
         max_rows_per_table: Mapping[str, int] | int | None = None,
         max_fk_fanout: int | None = None,
+        max_tombstones: int | None = None,
         cache: AggregateCache | None = None,
         aux: JoinAuxState | None = None,
         aux_state: JoinAuxState | None = None,
@@ -1976,11 +2264,9 @@ class JoinCacheManager:
         self.max_total_rows = max_total_rows
         self.max_rows_per_table = max_rows_per_table
         self.max_fk_fanout = max_fk_fanout
+        self.max_tombstones = max_tombstones
 
         tables = initial_tables or {rel: [] for rel in shape.relations()}
-        self.cache = cache or rebuild_join_cache(
-            shape, tables, primary_keys=self.primary_keys
-        )
         self.aux_state = (
             aux
             or aux_state
@@ -1996,7 +2282,14 @@ class JoinCacheManager:
                 max_total_rows=self.max_total_rows,
                 max_rows_per_table=self.max_rows_per_table,
                 max_fk_fanout=self.max_fk_fanout,
+                max_tombstones=self.max_tombstones,
             )
+        )
+        self.cache = cache or rebuild_join_cache(
+            shape,
+            tables,
+            primary_keys=self.primary_keys,
+            aux_state=self.aux_state,
         )
 
     @property
@@ -2015,9 +2308,6 @@ class JoinCacheManager:
         *,
         preserve_telemetry: bool = False,
     ) -> None:
-        self.cache = rebuild_join_cache(
-            self.shape, tables, primary_keys=self.primary_keys
-        )
         self.aux_state = JoinAuxState.from_tables(
             self.shape,
             tables,
@@ -2030,7 +2320,14 @@ class JoinCacheManager:
             max_total_rows=self.max_total_rows,
             max_rows_per_table=self.max_rows_per_table,
             max_fk_fanout=self.max_fk_fanout,
+            max_tombstones=self.max_tombstones,
             prior_state=self.aux_state if preserve_telemetry else None,
+        )
+        self.cache = rebuild_join_cache(
+            self.shape,
+            tables,
+            primary_keys=self.primary_keys,
+            aux_state=self.aux_state,
         )
 
 
@@ -2060,6 +2357,7 @@ class SharedJoinAuxPool:
         max_total_rows: int | None = None,
         max_rows_per_table: Mapping[str, int] | int | None = None,
         max_fk_fanout: int | None = None,
+        max_tombstones: int | None = None,
     ) -> None:
         if not shapes:
             raise ValueError(
@@ -2098,13 +2396,10 @@ class SharedJoinAuxPool:
         self.max_total_rows = max_total_rows
         self.max_rows_per_table = max_rows_per_table
         self.max_fk_fanout = max_fk_fanout
+        self.max_tombstones = max_tombstones
 
         all_rels = {rel for s in self.shapes for rel in s.relations()}
         tables = initial_tables or {rel: [] for rel in all_rels}
-        self.caches: dict[str, AggregateCache] = {
-            s.name: rebuild_join_cache(s, tables, primary_keys=self.primary_keys)
-            for s in self.shapes
-        }
         self.invalidated_queries: set[str] = set()
         self.aux_state = JoinAuxState.from_tables(
             self.shapes[0],
@@ -2119,7 +2414,28 @@ class SharedJoinAuxPool:
             max_total_rows=self.max_total_rows,
             max_rows_per_table=self.max_rows_per_table,
             max_fk_fanout=self.max_fk_fanout,
+            max_tombstones=self.max_tombstones,
         )
+        seed_aux = (
+            self.aux_state
+            if (
+                not self.aux_state.tombstone_overflowed
+                and all(not s for s in self.aux_state.evicted_pks.values())
+                and all(not s for s in self.aux_state.evicted_fk_buckets.values())
+            )
+            else JoinAuxState.from_tables(
+                self.shapes[0],
+                tables,
+                primary_keys=self.primary_keys,
+                extra_shapes=self.shapes[1:],
+            )
+        )
+        self.caches: dict[str, AggregateCache] = {
+            s.name: rebuild_join_cache(
+                s, tables, primary_keys=self.primary_keys, aux_state=seed_aux
+            )
+            for s in self.shapes
+        }
 
     @property
     def aux(self) -> JoinAuxState:
@@ -2135,6 +2451,9 @@ class SharedJoinAuxPool:
     def certify_all(self, event: WriteEvent) -> dict[str, Decision]:
         """Certify `event` against all registered queries without mutating state."""
         decisions: dict[str, Decision] = {}
+        b_clock = event.boundary_clock or (
+            str(event.event_id) if event.event_id is not None else None
+        )
         for s in self.shapes:
             if s.name in self.invalidated_queries:
                 cert = Certificate(
@@ -2151,6 +2470,7 @@ class SharedJoinAuxPool:
                         ),
                         "join_aux_state",
                     ],
+                    boundary_clock=b_clock,
                 )
                 decisions[s.name] = Decision.invalidate(
                     "missing_join_auxiliary_state", cert
@@ -2178,7 +2498,8 @@ class SharedJoinAuxPool:
         new_map = {str(k).lower(): v for k, v in (event.new or {}).items()}
         op = event.operation
 
-        any_valid_sync = False
+        any_full_mutation = False
+        any_disjoint_preserve = False
         any_invalidated = False
 
         for s in self.shapes:
@@ -2189,22 +2510,29 @@ class SharedJoinAuxPool:
                 any_invalidated = True
             elif dec.kind == DecisionKind.PRESERVE:
                 if event_rel in s.relations():
-                    any_valid_sync = True
+                    if dec.reason == "disjoint_columns":
+                        any_disjoint_preserve = True
+                    else:
+                        any_full_mutation = True
             elif dec.kind == DecisionKind.REPAIR:
                 try:
-                    old_contribs, new_contribs, _ = _compute_join_event_deltas(
-                        s,
-                        event_rel,
-                        op,
-                        old_map,
-                        new_map,
-                        self.aux_state,
-                        record_access=False,
-                    )
+                    precomputed = getattr(dec.certificate, "_precomputed_deltas", None)
+                    if precomputed is not None:
+                        old_contribs, new_contribs, _, _ = precomputed
+                    else:
+                        old_contribs, new_contribs, _ = _compute_join_event_deltas(
+                            s,
+                            event_rel,
+                            op,
+                            old_map,
+                            new_map,
+                            self.aux_state,
+                            record_access=False,
+                        )
                     _apply_contribs_to_cache(
                         s, self.caches[s.name], old_contribs, new_contribs
                     )
-                    any_valid_sync = True
+                    any_full_mutation = True
                 except _EvictedJoinKeyError:
                     inv_dec = Decision.invalidate(
                         "evicted_join_auxiliary_key", dec.certificate
@@ -2218,14 +2546,18 @@ class SharedJoinAuxPool:
                     self.invalidated_queries.add(s.name)
                     any_invalidated = True
 
-        if any_valid_sync and event_rel in self.aux_state.all_relations():
+        if event_rel in self.aux_state.all_relations():
             pk_col = self.aux_state.pk_col_for(event_rel)
-            if (
-                (op == "INSERT" and pk_col in new_map)
-                or (op == "DELETE" and pk_col in old_map)
-                or (op == "UPDATE" and (pk_col in old_map or pk_col in new_map))
-            ):
-                self.aux_state.apply_row_mutation(event_rel, op, old_map, new_map)
+            if any_full_mutation:
+                if (
+                    (op == "INSERT" and pk_col in new_map)
+                    or (op == "DELETE" and pk_col in old_map)
+                    or (op == "UPDATE" and (pk_col in old_map or pk_col in new_map))
+                ):
+                    self.aux_state.apply_row_mutation(event_rel, op, old_map, new_map)
+            elif any_disjoint_preserve:
+                if op == "UPDATE" and (pk_col in old_map or pk_col in new_map):
+                    self.aux_state.apply_disjoint_update(event_rel, old_map, new_map)
 
         if any_invalidated and on_invalidate is not None:
             live_tables = on_invalidate()
@@ -2240,11 +2572,8 @@ class SharedJoinAuxPool:
         preserve_telemetry: bool = True,
         only_invalidated: bool = False,
     ) -> None:
-        for s in self.shapes:
-            if not only_invalidated or s.name in self.invalidated_queries:
-                self.caches[s.name] = rebuild_join_cache(
-                    s, tables, primary_keys=self.primary_keys
-                )
+        prior = self.aux_state if preserve_telemetry else None
+        invalidated_snapshot = set(self.invalidated_queries)
         self.invalidated_queries.clear()
         self.aux_state = JoinAuxState.from_tables(
             self.shapes[0],
@@ -2259,8 +2588,28 @@ class SharedJoinAuxPool:
             max_total_rows=self.max_total_rows,
             max_rows_per_table=self.max_rows_per_table,
             max_fk_fanout=self.max_fk_fanout,
-            prior_state=self.aux_state if preserve_telemetry else None,
+            max_tombstones=self.max_tombstones,
+            prior_state=prior,
         )
+        seed_aux = (
+            self.aux_state
+            if (
+                not self.aux_state.tombstone_overflowed
+                and all(not s for s in self.aux_state.evicted_pks.values())
+                and all(not s for s in self.aux_state.evicted_fk_buckets.values())
+            )
+            else JoinAuxState.from_tables(
+                self.shapes[0],
+                tables,
+                primary_keys=self.primary_keys,
+                extra_shapes=self.shapes[1:],
+            )
+        )
+        for s in self.shapes:
+            if not only_invalidated or s.name in invalidated_snapshot:
+                self.caches[s.name] = rebuild_join_cache(
+                    s, tables, primary_keys=self.primary_keys, aux_state=seed_aux
+                )
 
 
 MultiQueryJoinCacheManager = SharedJoinAuxPool

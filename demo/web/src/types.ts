@@ -102,10 +102,13 @@ export interface BoundaryTrace {
   narration: string;
   table_written: string;
   operation: string;
+  change_sql?: string;
   highlighted_order_id: number | null;
   delta_summary: string;
   before_image: Record<string, unknown> | null;
   after_image: Record<string, unknown> | null;
+  cache_before?: Record<string, number> | null;
+  cache_after?: Record<string, number> | null;
   decision_kind: "preserve" | "repair" | "invalidate" | "unsupported";
   ui_badge:
     | "Preserve"
@@ -207,3 +210,65 @@ export interface RunTraceResponse {
     workload_note: string;
   };
 }
+
+export interface NormalFormTableSpec {
+  name: string;
+  attributes: string[];
+  candidate_keys: string[][];
+}
+
+export interface NormalizeResponse {
+  preset_id: "orders_2nf_lift" | "supplier_bcnf_split" | "custom";
+  dialect: "postgres" | "mssql";
+  relation: string;
+  attributes: string[];
+  minimal_cover: string[];
+  candidate_keys: string[][];
+  highest_normal_form: string;
+  is_1nf: boolean;
+  is_2nf: boolean;
+  is_3nf: boolean;
+  is_eknf: boolean;
+  is_bcnf: boolean;
+  violations: string[];
+  synthesis_3nf: {
+    tables: NormalFormTableSpec[];
+    is_lossless: boolean;
+    chase_steps: number;
+    counterexample: Record<string, unknown> | null;
+    ddl: string;
+  };
+  decomposition_bcnf: {
+    tables: NormalFormTableSpec[];
+    is_lossless: boolean;
+    is_dependency_preserving: boolean;
+    lost_dependencies: string[];
+    chase_steps: number;
+    counterexample: Record<string, unknown> | null;
+    ddl: string;
+  };
+  lossy_comparison: {
+    sub_relations: string[][];
+    is_lossless: boolean;
+    counterexample: Record<string, unknown> | null;
+  } | null;
+  doctor: {
+    query_sql: string | null;
+    non_sargable: Array<{
+      shape: string;
+      col: string;
+      expression: string;
+      reason: string;
+    }>;
+    implicit_conversions: Array<{
+      shape: string;
+      col: string;
+      col_type: string;
+      param_type: string;
+      risk: string;
+    }>;
+    fd_redundant_group_cols: string[];
+    reduced_group_cols: string[];
+  };
+}
+

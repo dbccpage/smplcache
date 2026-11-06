@@ -1,0 +1,4 @@
+overnight/baseline/front_1280x800.png (http://127.0.0.1:8765/ @ 1280x800): nav+render=63.40ms, metrics={"innerWidth":1280,"scrollWidth":1265,"scrollHeight":956}
+overnight/baseline/front_390x844.png (http://127.0.0.1:8765/ @ 390x844): nav+render=28.01ms, metrics={"innerWidth":427,"scrollWidth":427,"scrollHeight":2273}
+overnight/baseline/lab_1280x800.png (http://127.0.0.1:8765/lab/ @ 1280x800): nav+render=26.94ms, metrics={"innerWidth":1280,"scrollWidth":1265,"scrollHeight":2015}
+overnight/baseline/lab_390x844.png (http://127.0.0.1:8765/lab/ @ 390x844): nav+render=29.07ms, metrics={"innerWidth":390,"scrollWidth":390,"scrollHeight":5182}

@@ -1,0 +1,128 @@
+{
+  "version": "smplcache.workload.v0",
+  "schema": {
+    "orders": {
+      "columns": {
+        "order_id": {
+          "type": "INT",
+          "nullable": false,
+          "physical_type": "INT"
+        },
+        "customer_id": {
+          "type": "INT",
+          "nullable": false,
+          "physical_type": "INT"
+        },
+        "customer_tier": {
+          "type": "VARCHAR(50)",
+          "nullable": false,
+          "physical_type": "VARCHAR(50)"
+        },
+        "region_id": {
+          "type": "INT",
+          "nullable": false,
+          "physical_type": "INT"
+        },
+        "region_name": {
+          "type": "VARCHAR(50)",
+          "nullable": false,
+          "physical_type": "VARCHAR(50)"
+        },
+        "status": {
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "physical_type": "VARCHAR(20)"
+        },
+        "amount_cents": {
+          "type": "INT",
+          "nullable": false,
+          "physical_type": "INT"
+        }
+      },
+      "functional_dependencies": [
+        "order_id -> customer_id, status, amount_cents",
+        "customer_id -> customer_tier, region_id",
+        "region_id -> region_name"
+      ],
+      "indexes": []
+    }
+  },
+  "shapes": [
+    {
+      "name": "paid_revenue_by_customer_and_tier",
+      "relation": "orders",
+      "query": "SELECT customer_id, customer_tier, SUM(amount_cents) FROM orders WHERE status = 'paid' GROUP BY customer_id, customer_tier"
+    },
+    {
+      "name": "paid_orders_by_region",
+      "relation": "orders",
+      "query": "SELECT region_id, region_name, COUNT(*) FROM orders WHERE status = 'paid' GROUP BY region_id, region_name"
+    },
+    {
+      "name": "FulfillmentDashboard",
+      "relation": "orders",
+      "query": "SELECT status, COUNT(*) FROM orders WHERE status = 'paid' GROUP BY status"
+    }
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "relation": "orders",
+      "old": {
+        "order_id": 101,
+        "customer_id": 10,
+        "customer_tier": "gold",
+        "region_id": 1,
+        "region_name": "NA",
+        "status": "pending",
+        "amount_cents": 2500
+      },
+      "new": {
+        "order_id": 101,
+        "customer_id": 10,
+        "customer_tier": "gold",
+        "region_id": 1,
+        "region_name": "NA",
+        "status": "paid",
+        "amount_cents": 2500
+      }
+    },
+    {
+      "event_id": 2,
+      "relation": "orders",
+      "old": {
+        "order_id": 102,
+        "customer_id": 20,
+        "customer_tier": "silver",
+        "region_id": 2,
+        "region_name": "EU",
+        "status": "paid",
+        "amount_cents": 4000
+      },
+      "new": {
+        "order_id": 102,
+        "customer_id": 20,
+        "customer_tier": "silver",
+        "region_id": 2,
+        "region_name": "EU",
+        "status": "paid",
+        "amount_cents": 4500
+      }
+    },
+    {
+      "event_id": 3,
+      "relation": "orders",
+      "explicit_operation": "UPDATE",
+      "old": null,
+      "new": {
+        "order_id": 103,
+        "customer_id": 10,
+        "customer_tier": "gold",
+        "region_id": 1,
+        "region_name": "NA",
+        "status": "refunded",
+        "amount_cents": 1800
+      }
+    }
+  ]
+}

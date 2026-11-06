@@ -10,7 +10,11 @@ from dataclasses import replace
 import json
 import math
 import sys
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from smplcache.benchmark import (
     DEFAULT_BUDGET_GRID,
@@ -30,7 +34,20 @@ from smplcache.benchmark import (
     run_shared_multi_query_pool_benchmark,
     run_zipfian_eviction_sweep,
 )
-from smplcache.extractor import parse_sql
+from smplcache.extractor import parse_join_sql, parse_sql
+from smplcache.normal_forms import (
+    FunctionalDependency,
+    RelationalSchema,
+    attribute_closure,
+    candidate_keys,
+    classify_normal_form,
+    decompose_bcnf,
+    detect_fd_redundant_group_cols,
+    generate_sql_ddl,
+    minimal_cover,
+    synthesize_3nf,
+    tableau_chase,
+)
 from smplcache.smplcache import (
     DecisionKind,
     QueryShape,
@@ -94,6 +111,63 @@ def _shape_from_dict(
                 name=name,
                 security_cols=res.shape.security_cols | sec_cols,
             )
+        join_res = parse_join_sql(raw_sql, name=name)
+        if join_res.is_supported and join_res.shape is not None:
+            jshape = join_res.shape
+            deps = jshape.table_dependency_set(relation)
+            return QueryShape(
+                name=name,
+                relation=relation,
+                predicate_cols=set(deps["filter_cols"])
+                | set(s.get("predicate_cols", [])),
+                aggregate_cols=set(deps["read_cols"])
+                | set(s.get("aggregate_cols", [])),
+                group_cols=tuple(
+                    sorted(set(deps["group_cols"]) | set(s.get("group_cols", [])))
+                ),
+                projection_cols=set(deps["read_cols"])
+                | set(s.get("projection_cols", [])),
+                join_cols=set(deps["join_keys"]) | set(s.get("join_cols", [])),
+                security_cols=sec_cols | deps["security_cols"],
+            )
+
+        try:
+            parsed_ast = sqlglot.parse_one(raw_sql)
+            ast_preds: set[str] = set()
+            ast_groups: list[str] = []
+            ast_aggs: set[str] = set()
+            ast_projs: set[str] = set()
+            where_node = parsed_ast.find(exp.Where)
+            if where_node is not None:
+                for col_node in where_node.find_all(exp.Column):
+                    ast_preds.add(col_node.name.lower())
+            group_node = parsed_ast.find(exp.Group)
+            if group_node is not None:
+                for col_node in group_node.find_all(exp.Column):
+                    c_name = col_node.name.lower()
+                    if c_name not in ast_groups:
+                        ast_groups.append(c_name)
+            for agg_node in parsed_ast.find_all(exp.AggFunc):
+                for col_node in agg_node.find_all(exp.Column):
+                    ast_aggs.add(col_node.name.lower())
+            if isinstance(parsed_ast, exp.Select):
+                for sel_expr in parsed_ast.expressions:
+                    if not list(sel_expr.find_all(exp.AggFunc)):
+                        for col_node in sel_expr.find_all(exp.Column):
+                            ast_projs.add(col_node.name.lower())
+            merged_groups = list(s.get("group_cols", [])) or ast_groups
+            return QueryShape(
+                name=name,
+                relation=relation,
+                predicate_cols=set(s.get("predicate_cols", [])) | ast_preds,
+                aggregate_cols=set(s.get("aggregate_cols", [])) | ast_aggs,
+                group_cols=tuple(merged_groups),
+                projection_cols=set(s.get("projection_cols", [])) | ast_projs,
+                join_cols=set(s.get("join_cols", [])),
+                security_cols=sec_cols,
+            )
+        except SqlglotError:
+            pass
 
     return QueryShape(
         name=name,
@@ -116,11 +190,11 @@ def _event_from_dict(e: Mapping[str, Any], index: int) -> WriteEvent:
     )
     return WriteEvent(
         relation=str(e.get("relation", "")),
-        changed_cols=set(e.get("changed_cols", [])),
-        old=dict(e.get("old", {})),
-        new=dict(e.get("new", {})),
+        changed_cols=set(e.get("changed_cols") or []),
+        old=dict(e.get("old") or {}),
+        new=dict(e.get("new") or {}),
         event_id=evt_id,
-        explicit_operation=e.get("operation"),
+        explicit_operation=e.get("operation") or e.get("explicit_operation"),
     )
 
 
@@ -144,11 +218,16 @@ def calculate_topomap(
 
     for pair, _count in correlations:
         left, right = pair.split(" <-> ")
+        if left not in adjacency:
+            adjacency[left] = set()
+        if right not in adjacency:
+            adjacency[right] = set()
         adjacency[left].add(right)
         adjacency[right].add(left)
         edge_count += 1
 
-    active_nodes = [s for s in shape_names if adjacency[s]]
+    active_nodes = [s for s in shape_names if adjacency.get(s)]
+    isolated_shapes = [s for s in shape_names if not adjacency.get(s)]
     visited: set[str] = set()
     components: list[list[str]] = []
 
@@ -164,12 +243,12 @@ def calculate_topomap(
             cur = stack.pop()
             comp.append(cur)
 
-            for nxt in adjacency[cur]:
+            for nxt in sorted(adjacency[cur]):
                 if nxt not in visited:
                     visited.add(nxt)
                     stack.append(nxt)
 
-        components.append(comp)
+        components.append(sorted(comp))
 
     v = len(active_nodes)
     e = edge_count
@@ -181,15 +260,166 @@ def calculate_topomap(
     coupling_score = (edge_count / possible_edges * 100) if possible_edges else 0
 
     largest = max(components, key=len) if components else []
+    all_components = list(components) + [[s] for s in isolated_shapes]
 
     return {
+        "total_nodes": len(shape_names),
         "active_nodes": v,
+        "isolated_nodes": len(isolated_shapes),
+        "isolated_shapes": isolated_shapes,
         "edges": e,
         "components": c,
+        "total_components": len(all_components),
+        "all_components": all_components,
         "beta_1": beta_1,
         "coupling_score": coupling_score,
         "largest_component": largest,
     }
+
+
+def _parse_fds_from_raw(raw_fds: Any) -> list[FunctionalDependency]:
+    fds: list[FunctionalDependency] = []
+    if not isinstance(raw_fds, list):
+        return fds
+    for item in raw_fds:
+        if isinstance(item, FunctionalDependency):
+            fds.append(item)
+        elif isinstance(item, str) and "->" in item:
+            lhs_str, rhs_str = item.split("->", 1)
+            lhs = [c.strip().lower() for c in lhs_str.split(",") if c.strip()]
+            rhs = [c.strip().lower() for c in rhs_str.split(",") if c.strip()]
+            if lhs and rhs:
+                fds.append(FunctionalDependency(determinant=lhs, dependent=rhs))
+        elif isinstance(item, Mapping):
+            det = item.get("determinant", item.get("lhs", []))
+            dep = item.get("dependent", item.get("rhs", []))
+            if isinstance(det, str):
+                det = [c.strip().lower() for c in det.split(",") if c.strip()]
+            else:
+                det = [str(c).strip().lower() for c in det if str(c).strip()]
+            if isinstance(dep, str):
+                dep = [c.strip().lower() for c in dep.split(",") if c.strip()]
+            else:
+                dep = [str(c).strip().lower() for c in dep if str(c).strip()]
+            if det and dep:
+                fds.append(FunctionalDependency(determinant=det, dependent=dep))
+    return fds
+
+
+def _extract_relational_schemas(data: Mapping[str, Any]) -> list[RelationalSchema]:
+    schemas: list[RelationalSchema] = []
+
+    if "attributes" in data and ("functional_dependencies" in data or "fds" in data):
+        rel_name = normalize_relation(
+            str(data.get("name", data.get("relation", "relation")))
+        )
+        attrs = [
+            str(a).strip().lower() for a in data.get("attributes", []) if str(a).strip()
+        ]
+        raw_fds = data.get("functional_dependencies", data.get("fds", []))
+        fds = _parse_fds_from_raw(raw_fds)
+        col_types = {
+            str(k).strip().lower(): str(v).strip().upper()
+            for k, v in (data.get("column_types") or {}).items()
+        }
+        if attrs:
+            schemas.append(
+                RelationalSchema(
+                    name=rel_name,
+                    attributes=frozenset(attrs),
+                    functional_dependencies=tuple(fds),
+                    column_types=col_types,
+                )
+            )
+        return schemas
+
+    db_schema = data.get("schema", {})
+    top_fds_raw = data.get("functional_dependencies", data.get("fds", []))
+    shapes_raw = data.get("shapes", [])
+
+    if isinstance(db_schema, Mapping) and db_schema:
+        for rel_key, rel_info in db_schema.items():
+            if not isinstance(rel_info, Mapping):
+                continue
+            rel_name = normalize_relation(str(rel_key))
+            cols_dict = rel_info.get("columns", {})
+            attrs_set: set[str] = set()
+            col_types = {}
+            if isinstance(cols_dict, Mapping):
+                for c_name, c_meta in cols_dict.items():
+                    c_norm = str(c_name).strip().lower()
+                    attrs_set.add(c_norm)
+                    if isinstance(c_meta, Mapping):
+                        t_str = str(
+                            c_meta.get("type", c_meta.get("physical_type", "TEXT"))
+                        ).upper()
+                        col_types[c_norm] = t_str
+                    elif isinstance(c_meta, str):
+                        col_types[c_norm] = c_meta.upper()
+            elif isinstance(rel_info.get("attributes"), list):
+                for c_name in rel_info["attributes"]:
+                    attrs_set.add(str(c_name).strip().lower())
+
+            for s in shapes_raw:
+                if (
+                    isinstance(s, Mapping)
+                    and normalize_relation(str(s.get("relation", ""))) == rel_name
+                ):
+                    shape_obj = _shape_from_dict(s, db_schema)
+                    attrs_set.update(shape_obj.fingerprint())
+
+            rel_fds = _parse_fds_from_raw(
+                rel_info.get("functional_dependencies", rel_info.get("fds", []))
+            )
+            if isinstance(top_fds_raw, Mapping):
+                rel_fds.extend(_parse_fds_from_raw(top_fds_raw.get(rel_name, [])))
+            elif isinstance(top_fds_raw, list):
+                for fd in _parse_fds_from_raw(top_fds_raw):
+                    if (fd.determinant | fd.dependent) <= attrs_set or len(
+                        db_schema
+                    ) == 1:
+                        rel_fds.append(fd)
+                        attrs_set.update(fd.determinant | fd.dependent)
+
+            if attrs_set:
+                schemas.append(
+                    RelationalSchema(
+                        name=rel_name,
+                        attributes=frozenset(attrs_set),
+                        functional_dependencies=tuple(rel_fds),
+                        column_types=col_types,
+                    )
+                )
+
+    if not schemas and shapes_raw:
+        by_rel: dict[str, set[str]] = {}
+        for s in shapes_raw:
+            if isinstance(s, Mapping) and s.get("relation"):
+                shape_obj = _shape_from_dict(
+                    s, db_schema if isinstance(db_schema, Mapping) else None
+                )
+                by_rel.setdefault(shape_obj.relation, set()).update(
+                    shape_obj.fingerprint()
+                )
+        all_fds = _parse_fds_from_raw(top_fds_raw)
+        for rel_name, attrs_set in sorted(by_rel.items()):
+            rel_fds = [
+                fd
+                for fd in all_fds
+                if (fd.determinant | fd.dependent) <= attrs_set or len(by_rel) == 1
+            ]
+            for fd in rel_fds:
+                attrs_set.update(fd.determinant | fd.dependent)
+            if attrs_set:
+                schemas.append(
+                    RelationalSchema(
+                        name=rel_name,
+                        attributes=frozenset(attrs_set),
+                        functional_dependencies=tuple(rel_fds),
+                    )
+                )
+
+    return schemas
 
 
 def analyze_workload(
@@ -212,6 +442,8 @@ def analyze_workload(
     column_shape_links: dict[str, set[str]] = {}
     shape_hits: dict[str, int] = {s.name: 0 for s in shapes}
     shape_event_history: dict[str, set[int]] = {s.name: set() for s in shapes}
+    shape_repair_history: dict[str, set[int]] = {s.name: set() for s in shapes}
+    shape_invalidate_history: dict[str, set[int]] = {s.name: set() for s in shapes}
 
     avoided_details = []
     repair_opportunities = {s.name: {"repairable": 0, "full": 0} for s in shapes}
@@ -250,8 +482,10 @@ def analyze_workload(
 
                     if decision.kind == DecisionKind.REPAIR:
                         repair_opportunities[shape.name]["repairable"] += 1
+                        shape_repair_history[shape.name].add(i)
                     else:
                         repair_opportunities[shape.name]["full"] += 1
+                        shape_invalidate_history[shape.name].add(i)
                 else:
                     event_avoided_shapes.append(shape.name)
 
@@ -275,13 +509,27 @@ def analyze_workload(
     gravity_wells = sorted(column_hits.items(), key=lambda x: x[1], reverse=True)
 
     correlations_map: dict[str, int] = {}
+    correlation_breakdown: dict[str, dict[str, int]] = {}
     shape_names = [s.name for s in shapes]
     for i in range(len(shape_names)):
         for j in range(i + 1, len(shape_names)):
             s1, s2 = shape_names[i], shape_names[j]
-            overlap = len(shape_event_history[s1] & shape_event_history[s2])
+            shared_events = shape_event_history[s1] & shape_event_history[s2]
+            overlap = len(shared_events)
             if overlap > 0:
-                correlations_map[f"{s1} <-> {s2}"] = overlap
+                pair_key = f"{s1} <-> {s2}"
+                correlations_map[pair_key] = overlap
+                both_repair = len(shape_repair_history[s1] & shape_repair_history[s2])
+                both_inv = len(
+                    shape_invalidate_history[s1] & shape_invalidate_history[s2]
+                )
+                mixed = overlap - both_repair - both_inv
+                correlation_breakdown[pair_key] = {
+                    "total": overlap,
+                    "repair": both_repair,
+                    "invalidate": both_inv,
+                    "mixed": mixed,
+                }
 
     correlations = sorted(correlations_map.items(), key=lambda x: x[1], reverse=True)
 
@@ -310,6 +558,7 @@ def analyze_workload(
             repair_opportunities,
             topomap_data,
             column_shape_links,
+            correlation_breakdown=correlation_breakdown,
         )
     else:
         print_text_report(
@@ -326,6 +575,7 @@ def analyze_workload(
             repair_opportunities,
             topomap_data,
             column_shape_links,
+            correlation_breakdown=correlation_breakdown,
         )
 
 
@@ -343,6 +593,7 @@ def print_text_report(
     repair_ops: dict[str, dict[str, int]],
     topomap_data: dict[str, Any] | None,
     links: dict[str, set[str]],
+    correlation_breakdown: dict[str, dict[str, int]] | None = None,
 ) -> None:
     print("=" * 60)
     print(" smplcache Workload Advisor Report")
@@ -379,11 +630,20 @@ def print_text_report(
 
     print("\n--- SHAPE COUPLING (Correlation Matrix) ---")
     for pair, count in correlations[:5]:
-        print(f"  {pair}: invalidated together {count} time(s)")
+        if correlation_breakdown and pair in correlation_breakdown:
+            bd = correlation_breakdown[pair]
+            print(
+                f"  {pair}: invalidated together {count} time(s) "
+                f"(repair={bd['repair']}, invalidate={bd['invalidate']}, mixed={bd['mixed']})"
+            )
+        else:
+            print(f"  {pair}: invalidated together {count} time(s)")
 
     if topomap_data:
         print("\n--- TOPOLOGICAL WORKLOAD GEOMETRY (TopoMap) ---")
+        print(f"  Total Shapes: {topomap_data.get('total_nodes', num_shapes)}")
         print(f"  Coupled Shapes: {topomap_data['active_nodes']}")
+        print(f"  Isolated Shapes: {topomap_data.get('isolated_nodes', 0)}")
         print(f"  Coupling Edges: {topomap_data['edges']}")
         print(f"  Connected Components: {topomap_data['components']}")
         print(f"  Cache Betti-1 (Cycles): {topomap_data['beta_1']}")
@@ -394,6 +654,9 @@ def print_text_report(
             print("  " + ", ".join(topomap_data["largest_component"]))
         else:
             print("  None")
+        if topomap_data.get("isolated_shapes"):
+            print("\n  Isolated Singleton Shapes:")
+            print("  " + ", ".join(topomap_data["isolated_shapes"]))
 
         print("\n  Interpretation:")
         if topomap_data["beta_1"] == 0:
@@ -456,6 +719,7 @@ def print_markdown_report(
     repair_ops: dict[str, dict[str, int]],
     topomap_data: dict[str, Any] | None,
     links: dict[str, set[str]],
+    correlation_breakdown: dict[str, dict[str, int]] | None = None,
 ) -> None:
     print("# smplcache Workload Advisor Report\n")
     print(
@@ -510,16 +774,26 @@ def print_markdown_report(
     if not correlations:
         print("*No structurally coupled shapes detected.*")
     else:
-        print("| Coupled Shapes | Co-Invalidation Count |")
-        print("|----------------|-----------------------|")
+        print(
+            "| Coupled Shapes | Co-Invalidation Count | Both Repair | Both Invalidate | Mixed |"
+        )
+        print("|---|---:|---:|---:|---:|")
         for pair, count in correlations[:5]:
-            print(f"| `{pair}` | {count} |")
+            if correlation_breakdown and pair in correlation_breakdown:
+                bd = correlation_breakdown[pair]
+                print(
+                    f"| `{pair}` | {count} | {bd['repair']} | {bd['invalidate']} | {bd['mixed']} |"
+                )
+            else:
+                print(f"| `{pair}` | {count} | 0 | {count} | 0 |")
 
     if topomap_data:
         print("\n## Topological Workload Geometry (TopoMap)")
         print("| Metric | Value |")
         print("|---|---:|")
+        print(f"| Total Shapes | {topomap_data.get('total_nodes', num_shapes)} |")
         print(f"| Coupled Shapes | {topomap_data['active_nodes']} |")
+        print(f"| Isolated Shapes | {topomap_data.get('isolated_nodes', 0)} |")
         print(f"| Coupling Edges | {topomap_data['edges']} |")
         print(f"| Connected Components | {topomap_data['components']} |")
         print(f"| Cache Betti-1 (Cycles) | {topomap_data['beta_1']} |")
@@ -531,6 +805,10 @@ def print_markdown_report(
             print("`" + "`, `".join(topomap_data["largest_component"]) + "`")
         else:
             print("*None*")
+
+        if topomap_data.get("isolated_shapes"):
+            print("\n### Isolated Singleton Shapes")
+            print("`" + "`, `".join(topomap_data["isolated_shapes"]) + "`")
 
         print("\n### Interpretation")
         if topomap_data["beta_1"] == 0:
@@ -575,18 +853,172 @@ def print_markdown_report(
             print(f"   Current Cache Betti-1 = {topomap_data['beta_1']}.")
 
 
-def run_doctor(workload_path: str, format_md: bool) -> None:
+_NUMERIC_SQL_TYPES = {
+    "int",
+    "integer",
+    "bigint",
+    "smallint",
+    "tinyint",
+    "numeric",
+    "decimal",
+    "float",
+    "real",
+    "double",
+    "double precision",
+}
+_STRING_SQL_TYPES = {
+    "varchar",
+    "nvarchar",
+    "char",
+    "nchar",
+    "text",
+    "string",
+    "uuid",
+}
+
+
+def _base_sql_type(type_str: str) -> str:
+    cleaned = type_str.strip().lower()
+    if "(" in cleaned:
+        cleaned = cleaned.split("(", 1)[0].strip()
+    return cleaned
+
+
+def _inspect_sql_ast_doctor(
+    raw_sql: str,
+    shape_name: str,
+    relation: str,
+    rel_schema: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    non_sargable_findings: list[dict[str, Any]] = []
+    implicit_conv_findings: list[dict[str, Any]] = []
+
+    try:
+        parsed = sqlglot.parse_one(raw_sql)
+    except SqlglotError:
+        return non_sargable_findings, implicit_conv_findings
+
+    where_node = parsed.find(exp.Where)
+    if where_node is None:
+        return non_sargable_findings, implicit_conv_findings
+
+    seen_non_sargable: set[tuple[str, str]] = set()
+    seen_implicit: set[tuple[str, str]] = set()
+
+    for node in where_node.walk():
+        if isinstance(node, (exp.Like, exp.ILike)):
+            col_node = node.this
+            pat_node = node.expression
+            if isinstance(col_node, exp.Column) and isinstance(pat_node, exp.Literal):
+                pat_val = str(pat_node.this)
+                if pat_val.startswith("%"):
+                    col_name = col_node.name.lower()
+                    key = (col_name, "leading_wildcard_like")
+                    if key not in seen_non_sargable:
+                        seen_non_sargable.add(key)
+                        non_sargable_findings.append(
+                            {
+                                "shape": shape_name,
+                                "col": f"{relation}.{col_name}",
+                                "expression": node.sql(),
+                                "reason": "leading_wildcard_like",
+                            }
+                        )
+
+        elif isinstance(
+            node,
+            (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE),
+        ):
+            sides = [(node.this, node.expression), (node.expression, node.this)]
+            for left_expr, right_expr in sides:
+                if left_expr is None:
+                    continue
+                if isinstance(left_expr, exp.Column) and isinstance(
+                    right_expr, exp.Literal
+                ):
+                    col_name = left_expr.name.lower()
+                    if col_name in rel_schema:
+                        col_meta = rel_schema[col_name]
+                        raw_t = (
+                            col_meta.get("type", col_meta.get("physical_type", ""))
+                            if isinstance(col_meta, Mapping)
+                            else str(col_meta)
+                        )
+                        base_t = _base_sql_type(raw_t)
+                        if base_t in _NUMERIC_SQL_TYPES and right_expr.is_string:
+                            ikey = (col_name, "STRING_LITERAL")
+                            if ikey not in seen_implicit:
+                                seen_implicit.add(ikey)
+                                implicit_conv_findings.append(
+                                    {
+                                        "shape": shape_name,
+                                        "col": f"{relation}.{col_name}",
+                                        "col_type": raw_t.upper(),
+                                        "param_type": "VARCHAR",
+                                        "risk": "string literal compared to numeric column",
+                                    }
+                                )
+                        elif base_t in _STRING_SQL_TYPES and right_expr.is_number:
+                            ikey = (col_name, "NUMERIC_LITERAL")
+                            if ikey not in seen_implicit:
+                                seen_implicit.add(ikey)
+                                implicit_conv_findings.append(
+                                    {
+                                        "shape": shape_name,
+                                        "col": f"{relation}.{col_name}",
+                                        "col_type": raw_t.upper(),
+                                        "param_type": "NUMERIC",
+                                        "risk": "numeric literal compared to string column",
+                                    }
+                                )
+                elif not isinstance(left_expr, exp.Column):
+                    cols_in_expr = list(left_expr.find_all(exp.Column))
+                    if cols_in_expr:
+                        is_arith = isinstance(
+                            left_expr, (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Mod)
+                        ) or any(
+                            isinstance(
+                                sub, (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Mod)
+                            )
+                            for sub in left_expr.walk()
+                        )
+                        reason = (
+                            "arithmetic_on_column" if is_arith else "function_on_column"
+                        )
+                        for c_node in cols_in_expr:
+                            col_name = c_node.name.lower()
+                            key = (col_name, reason)
+                            if key not in seen_non_sargable:
+                                seen_non_sargable.add(key)
+                                non_sargable_findings.append(
+                                    {
+                                        "shape": shape_name,
+                                        "col": f"{relation}.{col_name}",
+                                        "expression": left_expr.sql(),
+                                        "reason": reason,
+                                    }
+                                )
+
+    return non_sargable_findings, implicit_conv_findings
+
+
+def run_doctor(workload_path: str, format_md: bool) -> dict[str, Any]:
     with open(workload_path, "r", encoding="utf-8") as f:
         data = validate_workload_data(json.load(f), require_events=False)
 
     db_schema = data.get("schema", {})
     shapes = data.get("shapes", [])
     observed_shape_types = data.get("observed_shape_types", [])
+    rel_schemas = {rs.name: rs for rs in _extract_relational_schemas(data)}
+    top_fds = _parse_fds_from_raw(
+        data.get("functional_dependencies", data.get("fds", []))
+    )
 
     implicit_conversions: list[dict[str, Any]] = []
     missing_indexes: list[dict[str, Any]] = []
-    non_sargable: list[Any] = []
+    non_sargable: list[dict[str, Any]] = []
     parameter_skews: list[dict[str, Any]] = []
+    fd_redundant_groups: list[dict[str, Any]] = []
 
     for s in shapes:
         shape_obj = _shape_from_dict(s, db_schema)
@@ -603,13 +1035,18 @@ def run_doctor(workload_path: str, format_md: bool) -> None:
 
         for p_name, p_info in params.items():
             if p_name in rel_schema:
+                col_meta = rel_schema[p_name]
                 col_type = (
-                    rel_schema[p_name]
-                    .get("type", rel_schema[p_name].get("physical_type", ""))
-                    .lower()
+                    col_meta.get("type", col_meta.get("physical_type", "")).lower()
+                    if isinstance(col_meta, Mapping)
+                    else str(col_meta).lower()
                 )
                 param_type = p_info.get("type", "").lower()
-                if col_type and param_type and col_type != param_type:
+                if (
+                    col_type
+                    and param_type
+                    and _base_sql_type(col_type) != _base_sql_type(param_type)
+                ):
                     implicit_conversions.append(
                         {
                             "shape": name,
@@ -619,6 +1056,36 @@ def run_doctor(workload_path: str, format_md: bool) -> None:
                             "risk": "index seek risk",
                         }
                     )
+
+        raw_sql = s.get("query") or s.get("sql")
+        if isinstance(raw_sql, str) and raw_sql.strip():
+            ast_ns, ast_ic = _inspect_sql_ast_doctor(
+                raw_sql, name, relation, rel_schema
+            )
+            non_sargable.extend(ast_ns)
+            implicit_conversions.extend(ast_ic)
+
+        rel_fds: list[FunctionalDependency] = []
+        if relation in rel_schemas:
+            rel_fds.extend(rel_schemas[relation].functional_dependencies)
+        elif top_fds:
+            rel_fds.extend(top_fds)
+
+        if rel_fds and shape_obj.group_cols:
+            redundant_cols = detect_fd_redundant_group_cols(shape_obj, rel_fds)
+            if redundant_cols:
+                reduced_groups = [
+                    c for c in shape_obj.group_cols if c.lower() not in redundant_cols
+                ]
+                fd_redundant_groups.append(
+                    {
+                        "shape": name,
+                        "relation": relation,
+                        "original_group_cols": list(shape_obj.group_cols),
+                        "redundant_cols": list(redundant_cols),
+                        "reduced_group_cols": reduced_groups,
+                    }
+                )
 
         keys = set(predicates) | set(groups) | set(joins)
         includes = (set(projections) | set(aggregates)) - keys
@@ -653,7 +1120,31 @@ def run_doctor(workload_path: str, format_md: bool) -> None:
         print(f"| Missing Index Candidates | {len(missing_indexes)} |")
         print(f"| Parameter Skew Risks | {len(parameter_skews)} |")
         print("| Cardinality Drift Warnings | 0 |")
-        print(f"| Non-Sargable Predicate Risks | {len(non_sargable)} |\n")
+        print(f"| Non-Sargable Predicate Risks | {len(non_sargable)} |")
+        print(f"| FD-Redundant GROUP BY Risks | {len(fd_redundant_groups)} |\n")
+
+        if non_sargable:
+            print("## Non-Sargable Predicate Risks\n")
+            print("| Shape | Column | Expression | Reason |")
+            print("|---|---|---|---|")
+            for ns in non_sargable:
+                print(
+                    f"| `{ns['shape']}` | `{ns['col']}` | `{ns['expression']}` | `{ns['reason']}` |"
+                )
+            print()
+
+        if fd_redundant_groups:
+            print("## FD-Redundant GROUP BY Columns\n")
+            print(
+                "| Shape | Original GROUP BY | Redundant Columns | Reduced GROUP BY |"
+            )
+            print("|---|---|---|---|")
+            for fg in fd_redundant_groups:
+                orig_s = ", ".join(fg["original_group_cols"])
+                red_s = ", ".join(fg["redundant_cols"])
+                reduced_s = ", ".join(fg["reduced_group_cols"])
+                print(f"| `{fg['shape']}` | `{orig_s}` | `{red_s}` | `{reduced_s}` |")
+            print()
 
         if parameter_skews:
             print("## Parameter Shape Split\n")
@@ -695,9 +1186,26 @@ def run_doctor(workload_path: str, format_md: bool) -> None:
         print(" smplcache Query Shape Doctor")
         print("=" * 60)
         print("--- SUMMARY ---")
-        print(f"Implicit Conversion Risks: {len(implicit_conversions)}")
-        print(f"Missing Index Candidates:  {len(missing_indexes)}")
-        print(f"Parameter Skew Risks:      {len(parameter_skews)}\n")
+        print(f"Implicit Conversion Risks:    {len(implicit_conversions)}")
+        print(f"Missing Index Candidates:     {len(missing_indexes)}")
+        print(f"Parameter Skew Risks:         {len(parameter_skews)}")
+        print(f"Non-Sargable Predicate Risks: {len(non_sargable)}")
+        print(f"FD-Redundant GROUP BY Risks:  {len(fd_redundant_groups)}\n")
+
+        if non_sargable:
+            print("--- NON-SARGABLE PREDICATES ---")
+            for ns in non_sargable:
+                print(f"  Shape: {ns['shape']}")
+                print(
+                    f"  Col:   {ns['col']} in `{ns['expression']}` ({ns['reason']})\n"
+                )
+
+        if fd_redundant_groups:
+            print("--- FD-REDUNDANT GROUP BY COLUMNS ---")
+            for fg in fd_redundant_groups:
+                print(f"  Shape:     {fg['shape']}")
+                print(f"  Redundant: {', '.join(fg['redundant_cols'])}")
+                print(f"  Reduced:   GROUP BY {', '.join(fg['reduced_group_cols'])}\n")
 
         if parameter_skews:
             print("--- PARAMETER SKEW ---")
@@ -720,8 +1228,16 @@ def run_doctor(workload_path: str, format_md: bool) -> None:
                 print(f"  Shape: {mi['shape']}")
                 print(f"  Index: {mi['sql']}\n")
 
+    return {
+        "implicit_conversions": implicit_conversions,
+        "missing_indexes": missing_indexes,
+        "non_sargable": non_sargable,
+        "parameter_skews": parameter_skews,
+        "fd_redundant_groups": fd_redundant_groups,
+    }
 
-def compare_workloads(path_a: str, path_b: str, format_md: bool) -> None:
+
+def compare_workloads(path_a: str, path_b: str, format_md: bool) -> dict[str, Any]:
     def get_metrics(path: str) -> dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             data = validate_workload_data(json.load(f), require_events=True)
@@ -733,12 +1249,22 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> None:
         ]
 
         shape_event_history: dict[str, set[int]] = {s: set() for s in shape_names}
+        column_hits: dict[str, int] = {}
+        all_cols: set[str] = set()
+        for shape_obj in shape_objs:
+            for c in shape_obj.fingerprint():
+                all_cols.add(f"{shape_obj.relation}.{c}")
+
         for i, evt in enumerate(events):
             rel = normalize_relation(evt.relation)
             changed = evt.derived_changed_cols()
             for shape_obj in shape_objs:
-                if shape_obj.relation == rel and (shape_obj.fingerprint() & changed):
+                intersection = shape_obj.fingerprint() & changed
+                if shape_obj.relation == rel and intersection:
                     shape_event_history[shape_obj.name].add(i)
+                    for col in intersection:
+                        col_key = f"{shape_obj.relation}.{col}"
+                        column_hits[col_key] = column_hits.get(col_key, 0) + 1
 
         correlations: dict[str, int] = {}
         for i in range(len(shape_names)):
@@ -749,12 +1275,16 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> None:
                     correlations[f"{s1} <-> {s2}"] = overlap
 
         shape_hits = {s: len(shape_event_history[s]) for s in shape_names}
+        gravity_wells = sorted(column_hits.items(), key=lambda x: x[1], reverse=True)
 
         topomap = calculate_topomap(shape_names, correlations.items())
         entropy = calculate_entropy(shape_hits)
 
         topomap["entropy"] = entropy
         topomap["shapes_count"] = len(shape_names)
+        topomap["gravity_wells"] = gravity_wells
+        topomap["all_cols"] = sorted(all_cols)
+        topomap["rel_schemas"] = _extract_relational_schemas(data)
         topomap["score"] = (
             topomap["beta_1"]
             + (topomap["coupling_score"] / 100.0)
@@ -768,6 +1298,47 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> None:
 
     m_a = get_metrics(path_a)
     m_b = get_metrics(path_b)
+
+    primary_obstruction = (
+        m_a["gravity_wells"][0][0] if m_a.get("gravity_wells") else "orders.status"
+    )
+    obs_rel = (
+        primary_obstruction.split(".", 1)[0] if "." in primary_obstruction else "orders"
+    )
+    cols_a = set(m_a.get("all_cols", []))
+    cols_b = set(m_b.get("all_cols", []))
+    new_cols_in_b = sorted(
+        c.split(".", 1)[1] if "." in c else c
+        for c in (cols_b - cols_a)
+        if c.startswith(f"{obs_rel}.")
+    )
+    if not new_cols_in_b:
+        new_cols_in_b = ["payment_status", "fulfillment_status", "support_status"]
+
+    nf_summaries: list[dict[str, Any]] = []
+    for rs in m_a.get("rel_schemas", []):
+        if rs.functional_dependencies:
+            nf_rep = classify_normal_form(rs)
+            synth_3nf = synthesize_3nf(rs)
+            bcnf_dec = decompose_bcnf(rs)
+            chase_3nf = tableau_chase(rs, [t.attributes for t in synth_3nf])
+            chase_bcnf = tableau_chase(rs, [t.attributes for t in bcnf_dec.tables])
+            pg_ddl = generate_sql_ddl(bcnf_dec.tables, dialect="postgres").ddl_script
+            ms_ddl = generate_sql_ddl(bcnf_dec.tables, dialect="mssql").ddl_script
+            nf_summaries.append(
+                {
+                    "relation": rs.name,
+                    "highest_normal_form": nf_rep.highest_normal_form,
+                    "3nf_tables": [(t.name, sorted(t.attributes)) for t in synth_3nf],
+                    "bcnf_tables": [
+                        (t.name, sorted(t.attributes)) for t in bcnf_dec.tables
+                    ],
+                    "chase_3nf_lossless": chase_3nf.is_lossless,
+                    "chase_bcnf_lossless": chase_bcnf.is_lossless,
+                    "postgres_ddl": pg_ddl,
+                    "mssql_ddl": ms_ddl,
+                }
+            )
 
     if format_md:
         print("# smplcache Lift Report\n")
@@ -796,14 +1367,34 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> None:
             f"The proposed lift reduced invalidation cycles from {m_a['beta_1']} to {m_b['beta_1']} and reduced coupling score from {m_a['coupling_score']:.1f}% to {m_b['coupling_score']:.1f}%.\n"
         )
         print("Primary obstruction:")
-        print("`orders.status`\n")
+        print(f"`{primary_obstruction}`\n")
         print("Suggested lift:")
         print(
-            "split `orders.status` into narrower observer-specific status dependencies:\n"
+            f"split `{primary_obstruction}` into narrower observer-specific dependencies:\n"
         )
-        print("- `payment_status`")
-        print("- `fulfillment_status`")
-        print("- `support_status`")
+        for col_name in new_cols_in_b:
+            print(f"- `{col_name}`")
+
+        if nf_summaries:
+            print("\n## Normal-Form Decomposition & Tableau Chase Verification\n")
+            for nfs in nf_summaries:
+                print(
+                    f"- **Relation `{nfs['relation']}`**: classified as `{nfs['highest_normal_form']}`"
+                )
+                print(
+                    f"  - **3NF Synthesis (lossless={nfs['chase_3nf_lossless']})**: "
+                    + ", ".join(
+                        f"`{tname}({', '.join(tcols)})`"
+                        for tname, tcols in nfs["3nf_tables"]
+                    )
+                )
+                print(
+                    f"  - **BCNF Decomposition (lossless={nfs['chase_bcnf_lossless']})**: "
+                    + ", ".join(
+                        f"`{tname}({', '.join(tcols)})`"
+                        for tname, tcols in nfs["bcnf_tables"]
+                    )
+                )
     else:
         print("=" * 60)
         print(" smplcache Lift Report")
@@ -816,6 +1407,237 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> None:
         print(f"  Cache Betti-1: {m_b['beta_1']}")
         print(f"  Coupling Score: {m_b['coupling_score']:.1f}%")
         print(f"  Obstruction Score: {m_b['score']:.2f}\n")
+        print(f"Primary obstruction: {primary_obstruction}")
+        print("Suggested lift columns: " + ", ".join(new_cols_in_b))
+        if nf_summaries:
+            print("\n--- NORMAL-FORM DECOMPOSITION ---")
+            for nfs in nf_summaries:
+                print(
+                    f"  {nfs['relation']} ({nfs['highest_normal_form']}): "
+                    f"3NF lossless={nfs['chase_3nf_lossless']}, "
+                    f"BCNF lossless={nfs['chase_bcnf_lossless']}"
+                )
+
+    return {
+        "before": m_a,
+        "after": m_b,
+        "primary_obstruction": primary_obstruction,
+        "lifted_columns": new_cols_in_b,
+        "normal_form_summaries": nf_summaries,
+    }
+
+
+def normalize_workload_or_schema(
+    path: str, dialect: str = "postgres"
+) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, Mapping):
+        raise ValueError("Input JSON root must be an object.")
+
+    rel_schemas = _extract_relational_schemas(data)
+    if not rel_schemas:
+        raise ValueError(
+            "No relational schemas or shapes with attributes found in input JSON."
+        )
+
+    db_schema = (
+        data.get("schema", {}) if isinstance(data.get("schema"), Mapping) else {}
+    )
+    shapes_raw = data.get("shapes", []) if isinstance(data.get("shapes"), list) else []
+
+    relations_report: list[dict[str, Any]] = []
+    for rs in rel_schemas:
+        min_cov = minimal_cover(rs.functional_dependencies)
+        cand_keys = candidate_keys(rs)
+        fd_closures: dict[str, list[str]] = {}
+        seen_dets: list[frozenset[str]] = []
+        for fd in rs.functional_dependencies:
+            if fd.determinant not in seen_dets:
+                seen_dets.append(fd.determinant)
+        for ck in cand_keys:
+            if ck not in seen_dets:
+                seen_dets.append(ck)
+        for det in seen_dets:
+            det_key = ", ".join(sorted(det))
+            fd_closures[det_key] = sorted(
+                attribute_closure(det, rs.functional_dependencies)
+            )
+        nf_report = classify_normal_form(rs)
+        tables_3nf = synthesize_3nf(rs)
+        bcnf_res = decompose_bcnf(rs)
+        chase_3nf = tableau_chase(rs, [t.attributes for t in tables_3nf])
+        chase_bcnf = tableau_chase(rs, [t.attributes for t in bcnf_res.tables])
+        sql_dialect: Literal["postgres", "mssql"] = (
+            "mssql" if dialect == "mssql" else "postgres"
+        )
+        ddl_3nf = generate_sql_ddl(tables_3nf, dialect=sql_dialect).ddl_script
+        ddl_bcnf = generate_sql_ddl(bcnf_res.tables, dialect=sql_dialect).ddl_script
+
+        shape_redundancies: list[dict[str, Any]] = []
+        for s in shapes_raw:
+            if (
+                isinstance(s, Mapping)
+                and normalize_relation(str(s.get("relation", ""))) == rs.name
+            ):
+                shape_obj = _shape_from_dict(s, db_schema)
+                if shape_obj.group_cols and rs.functional_dependencies:
+                    red_cols = detect_fd_redundant_group_cols(
+                        shape_obj, rs.functional_dependencies
+                    )
+                    if red_cols:
+                        shape_redundancies.append(
+                            {
+                                "shape": shape_obj.name,
+                                "original_group_cols": list(shape_obj.group_cols),
+                                "redundant_cols": list(red_cols),
+                                "reduced_group_cols": [
+                                    c
+                                    for c in shape_obj.group_cols
+                                    if c.lower() not in red_cols
+                                ],
+                            }
+                        )
+
+        relations_report.append(
+            {
+                "relation": rs.name,
+                "attributes": sorted(rs.attributes),
+                "fd_closure": fd_closures,
+                "minimal_cover": [
+                    {
+                        "determinant": sorted(fd.determinant),
+                        "dependent": sorted(fd.dependent),
+                    }
+                    for fd in min_cov
+                ],
+                "candidate_keys": [sorted(k) for k in cand_keys],
+                "highest_normal_form": nf_report.highest_normal_form,
+                "is_1nf": nf_report.is_1nf,
+                "is_2nf": nf_report.is_2nf,
+                "is_3nf": nf_report.is_3nf,
+                "is_eknf": nf_report.is_eknf,
+                "is_bcnf": nf_report.is_bcnf,
+                "violations": list(nf_report.violations),
+                "synthesis_3nf": {
+                    "tables": [
+                        {
+                            "name": t.name,
+                            "attributes": sorted(t.attributes),
+                            "candidate_keys": [sorted(k) for k in candidate_keys(t)],
+                        }
+                        for t in tables_3nf
+                    ],
+                    "is_lossless": chase_3nf.is_lossless,
+                    "counterexample": chase_3nf.counterexample,
+                    "ddl": ddl_3nf,
+                },
+                "decomposition_bcnf": {
+                    "tables": [
+                        {
+                            "name": t.name,
+                            "attributes": sorted(t.attributes),
+                            "candidate_keys": [sorted(k) for k in candidate_keys(t)],
+                        }
+                        for t in bcnf_res.tables
+                    ],
+                    "is_dependency_preserving": bcnf_res.is_dependency_preserving,
+                    "lost_dependencies": [
+                        {
+                            "determinant": sorted(fd.determinant),
+                            "dependent": sorted(fd.dependent),
+                        }
+                        for fd in bcnf_res.lost_dependencies
+                    ],
+                    "is_lossless": chase_bcnf.is_lossless,
+                    "counterexample": chase_bcnf.counterexample,
+                    "ddl": ddl_bcnf,
+                },
+                "fd_redundant_group_bys": shape_redundancies,
+            }
+        )
+
+    return {
+        "dialect": dialect,
+        "relations": relations_report,
+    }
+
+
+def run_normalize(
+    path: str, dialect: str = "postgres", output_format: str = "text"
+) -> dict[str, Any]:
+    report = normalize_workload_or_schema(path, dialect=dialect)
+    if output_format == "json":
+        print(json.dumps(report, indent=2))
+        return report
+
+    if output_format == "markdown":
+        print(f"# smplcache Schema Normalizer Report (`{dialect}`)\n")
+        for rel in report["relations"]:
+            print(f"## Relation: `{rel['relation']}`\n")
+            print(f"- **Attributes:** `{', '.join(rel['attributes'])}`")
+            keys_str = ", ".join(
+                "(" + ", ".join(k) + ")" for k in rel["candidate_keys"]
+            )
+            print(f"- **Candidate Keys:** `{keys_str}`")
+            if rel.get("fd_closure"):
+                closure_str = "; ".join(
+                    f"{{{k}}}+ = {{{', '.join(v)}}}"
+                    for k, v in rel["fd_closure"].items()
+                )
+                print(f"- **FD Closure:** `{closure_str}`")
+            print(f"- **Highest Normal Form:** `{rel['highest_normal_form']}`")
+            if rel["violations"]:
+                print("- **Violations:**")
+                for v in rel["violations"]:
+                    print(f"  - {v}")
+            print("\n### 3NF Synthesis (Bernstein)\n")
+            s3 = rel["synthesis_3nf"]
+            print(f"- **Tableau Chase Lossless:** `{s3['is_lossless']}`")
+            for t in s3["tables"]:
+                print(f"  - `{t['name']}({', '.join(t['attributes'])})`")
+            print(f"\n```sql\n{s3['ddl']}\n```\n")
+
+            print("### BCNF Decomposition (Tsou-Fischer)\n")
+            db = rel["decomposition_bcnf"]
+            print(f"- **Tableau Chase Lossless:** `{db['is_lossless']}`")
+            print(f"- **Dependency Preserving:** `{db['is_dependency_preserving']}`")
+            for t in db["tables"]:
+                print(f"  - `{t['name']}({', '.join(t['attributes'])})`")
+            print(f"\n```sql\n{db['ddl']}\n```\n")
+    else:
+        print("=" * 60)
+        print(f" smplcache Schema Normalizer Report (dialect={dialect})")
+        print("=" * 60)
+        for rel in report["relations"]:
+            print(f"Relation:            {rel['relation']}")
+            print(f"Attributes:          {', '.join(rel['attributes'])}")
+            keys_str = ", ".join(
+                "(" + ", ".join(k) + ")" for k in rel["candidate_keys"]
+            )
+            print(f"Candidate Keys:      {keys_str}")
+            if rel.get("fd_closure"):
+                closure_str = "; ".join(
+                    f"{{{k}}}+ = {{{', '.join(v)}}}"
+                    for k, v in rel["fd_closure"].items()
+                )
+                print(f"FD Closure:          {closure_str}")
+            print(f"Highest Normal Form: {rel['highest_normal_form']}")
+            s3 = rel["synthesis_3nf"]
+            print(f"3NF Lossless Chase:  {s3['is_lossless']}")
+            for t in s3["tables"]:
+                print(f"  3NF Table: {t['name']}({', '.join(t['attributes'])})")
+            db = rel["decomposition_bcnf"]
+            print(
+                f"BCNF Lossless Chase: {db['is_lossless']} (DepPreserving={db['is_dependency_preserving']})"
+            )
+            for t in db["tables"]:
+                print(f"  BCNF Table: {t['name']}({', '.join(t['attributes'])})")
+            print("\n--- 3NF MIGRATION DDL ---")
+            print(s3["ddl"])
+            print("=" * 60)
+
+    return report
 
 
 def calc_matrix_metrics(path: str) -> dict[str, Any] | None:
@@ -1426,6 +2248,27 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="Output format",
     )
 
+    normalize_parser = subparsers.add_parser(
+        "normalize",
+        help="Analyze functional dependencies, normal forms (3NF/BCNF), Tableau Chase losslessness, and migration DDL",
+    )
+    normalize_parser.add_argument(
+        "input_file",
+        help="Path to the JSON workload or relational schema file",
+    )
+    normalize_parser.add_argument(
+        "--dialect",
+        choices=["postgres", "mssql"],
+        default="postgres",
+        help="SQL dialect for migration DDL (default: postgres)",
+    )
+    normalize_parser.add_argument(
+        "--format",
+        choices=["text", "markdown", "json"],
+        default="text",
+        help="Output format",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "report":
@@ -1444,6 +2287,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         run_matrix(args.workload_a, args.workload_b, format_md=True)
     elif args.command == "ingest":
         run_ingest(args)
+    elif args.command == "normalize":
+        run_normalize(
+            args.input_file,
+            dialect=args.dialect,
+            output_format=args.format,
+        )
 
 
 if __name__ == "__main__":

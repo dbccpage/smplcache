@@ -217,6 +217,10 @@ class Predicate:
             normalized.append((str(col).lower(), str(op), lit))
         object.__setattr__(self, "terms", tuple(normalized))
 
+    @classmethod
+    def from_eq(cls, col: str, val: Any) -> Predicate:
+        return cls(terms=((str(col).lower(), "=", val),))
+
     @property
     def columns(self) -> frozenset[str]:
         return frozenset(col for col, _, _ in self.terms)
@@ -295,6 +299,12 @@ class QueryShape:
         default_factory=frozenset, init=False, repr=False
     )
     _has_unparsed_predicate: bool = field(default=False, init=False, repr=False)
+    _join_cols: frozenset[str] = field(
+        default_factory=frozenset, init=False, repr=False
+    )
+    _explicit_projection_cols: frozenset[str] = field(
+        default_factory=frozenset, init=False, repr=False
+    )
 
     def __init__(
         self,
@@ -315,12 +325,14 @@ class QueryShape:
     ) -> None:
         norm_rel = normalize_relation(relation)
         norm_groups = tuple(str(c).lower() for c in group_cols)
-        norm_projs = frozenset(str(c).lower() for c in projection_cols)
+        explicit_projs = frozenset(str(c).lower() for c in projection_cols)
+        norm_projs = explicit_projs
         norm_secs = frozenset(str(c).lower() for c in security_cols)
 
         supported = is_supported
         reason = unsupported_reason
 
+        norm_joins: frozenset[str] = frozenset()
         if join_cols:
             norm_joins = frozenset(str(c).lower() for c in join_cols)
             if norm_joins:
@@ -374,6 +386,12 @@ class QueryShape:
         object.__setattr__(self, "unsupported_reason", reason)
         object.__setattr__(self, "_extra_predicate_cols", extra_pred_cols)
         object.__setattr__(self, "_has_unparsed_predicate", has_unparsed_pred)
+        object.__setattr__(self, "_join_cols", norm_joins)
+        object.__setattr__(self, "_explicit_projection_cols", explicit_projs)
+
+    @property
+    def join_cols(self) -> frozenset[str]:
+        return self._join_cols
 
     @property
     def predicate_cols(self) -> frozenset[str]:
@@ -383,17 +401,25 @@ class QueryShape:
     def aggregate_cols(self) -> frozenset[str]:
         return frozenset({self.agg_col}) if self.agg_col else frozenset()
 
+    def dependency_set(self) -> dict[str, frozenset[str]]:
+        return {
+            "read_cols": self.aggregate_cols | self._explicit_projection_cols,
+            "join_keys": self._join_cols,
+            "filter_cols": self.predicate_cols,
+            "group_cols": frozenset(self.group_cols),
+            "security_cols": self.security_cols,
+        }
+
     @property
     def fingerprint(self) -> FingerprintSet:
-        cols: set[str] = set()
-        if self.agg_col is not None:
-            cols.add(self.agg_col)
-        cols.update(self.group_cols)
-        cols.update(self.predicate.columns)
-        cols.update(self._extra_predicate_cols)
-        cols.update(self.projection_cols)
-        cols.update(self.security_cols)
-        return FingerprintSet(cols)
+        deps = self.dependency_set()
+        return FingerprintSet(
+            deps["read_cols"]
+            | deps["join_keys"]
+            | deps["filter_cols"]
+            | deps["group_cols"]
+            | deps["security_cols"]
+        )
 
     def required_evidence(self) -> frozenset[str]:
         cols: set[str] = set()
@@ -423,6 +449,7 @@ class WriteEvent:
     explicit_operation: str | None = None
     unavailable_cols: set[str] = field(default_factory=set)
     schema_change: bool = False
+    boundary_clock: str | None = None
 
     @property
     def operation(self) -> str:
@@ -526,6 +553,128 @@ class AggregateCache:
             cache._refresh_group_value(g_key, shape.agg_fn, is_grouped)
         return cache
 
+    @classmethod
+    def from_group_state(
+        cls,
+        shape: Any,
+        group_stats: (
+            Mapping[Any, tuple[Any, int, int] | tuple[Any, int] | Mapping[str, Any]]
+            | Sequence[Mapping[str, Any]]
+        ),
+    ) -> AggregateCache:
+        """
+        Seed an `AggregateCache` with `_from_rows = True` directly from pre-aggregated
+        group statistics `(sum_val, non_null_count, row_count)` computed by an external
+        SQL engine (e.g., DuckDB, SQLite, PostgreSQL, or SQL Server) without pulling raw
+        base rows into Python memory.
+        """
+        cache = cls()
+        cache._from_rows = True
+        agg_fn: AggFn | None = getattr(shape, "agg_fn", None)
+        if agg_fn is None:
+            return cache
+
+        group_cols = tuple(getattr(shape, "group_cols", ()))
+        is_grouped = len(group_cols) > 0
+        if not is_grouped:
+            cache._group_state[()] = (Decimal(0), 0, 0)
+
+        def _norm_key(raw_k: Any) -> Any:
+            if not is_grouped and raw_k in ((), None):
+                return ()
+            if isinstance(raw_k, tuple):
+                if len(raw_k) == 0:
+                    return ()
+                if len(raw_k) == 1 and len(group_cols) == 1:
+                    return _checked_group_atom(raw_k[0])
+                return tuple(_checked_group_atom(x) for x in raw_k)
+            return _checked_group_atom(raw_k)
+
+        def _parse_stats_entry(entry: Any) -> tuple[Decimal, int, int]:
+            if isinstance(entry, tuple):
+                if len(entry) == 3:
+                    raw_s, raw_n, raw_r = entry
+                elif len(entry) == 2:
+                    raw_s, raw_n = entry
+                    raw_r = raw_n
+                else:
+                    raise ValueError(
+                        "group_stats tuple must have 2 or 3 elements: (sum_val, non_null_count[, row_count])"
+                    )
+            elif isinstance(entry, Mapping):
+                lower_e = {str(k).lower(): v for k, v in entry.items()}
+                raw_s = lower_e.get(
+                    "sum_val", lower_e.get("sum", lower_e.get("__sum_val", Decimal(0)))
+                )
+                raw_n = lower_e.get(
+                    "non_null_count",
+                    lower_e.get("count", lower_e.get("__non_null_count", 0)),
+                )
+                raw_r = lower_e.get(
+                    "row_count",
+                    lower_e.get("count_star", lower_e.get("__row_count", raw_n)),
+                )
+            else:
+                raise TypeError(
+                    f"Unsupported group_stats entry type: {type(entry).__name__}"
+                )
+
+            s_dec = Decimal(0) if raw_s is None else _aggregate_decimal(raw_s)
+            n_int = 0 if raw_n is None else int(raw_n)
+            r_int = 0 if raw_r is None else int(raw_r)
+            if n_int < 0 or r_int < 0 or n_int > r_int:
+                raise ValueError(
+                    f"Invalid group state counts: non_null_count={n_int}, row_count={r_int}"
+                )
+            return (s_dec, n_int, r_int)
+
+        if isinstance(group_stats, Mapping):
+            for raw_k, entry in group_stats.items():
+                norm_k = _norm_key(raw_k)
+                hash(norm_k)
+                s_dec, n_int, r_int = _parse_stats_entry(entry)
+                if is_grouped and r_int <= 0:
+                    continue
+                cache._group_state[norm_k] = (s_dec, n_int, r_int)
+        elif isinstance(group_stats, Sequence):
+            col_names: list[str] = []
+            for gc in group_cols:
+                if isinstance(gc, tuple) and len(gc) == 2:
+                    col_names.append(str(gc[1]).lower())
+                else:
+                    col_names.append(str(gc).lower())
+            for row in group_stats:
+                if not isinstance(row, Mapping):
+                    raise TypeError("Sequence group_stats entries must be mappings")
+                lower_row = {str(k).lower(): v for k, v in row.items()}
+                if not is_grouped:
+                    norm_k = ()
+                elif len(col_names) == 1:
+                    c0 = col_names[0]
+                    raw_val = lower_row.get(c0, lower_row.get("__group_0"))
+                    norm_k = _checked_group_atom(raw_val)
+                else:
+                    vals = [
+                        _checked_group_atom(
+                            lower_row.get(c, lower_row.get(f"__group_{idx}"))
+                        )
+                        for idx, c in enumerate(col_names)
+                    ]
+                    norm_k = tuple(vals)
+                hash(norm_k)
+                s_dec, n_int, r_int = _parse_stats_entry(lower_row)
+                if is_grouped and r_int <= 0:
+                    continue
+                cache._group_state[norm_k] = (s_dec, n_int, r_int)
+        else:
+            raise TypeError(
+                "group_stats must be a Mapping or Sequence of group state mappings"
+            )
+
+        for g_key in list(cache._group_state.keys()):
+            cache._refresh_group_value(g_key, agg_fn, is_grouped)
+        return cache
+
     def _refresh_group_value(
         self, g_key: Any, agg_fn: AggFn | None, is_grouped: bool
     ) -> None:
@@ -610,12 +759,18 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
     shape_rel = normalize_relation(shape.relation)
     event_rel = normalize_relation(event.relation)
 
+    resolved_clock = event.boundary_clock or (
+        str(event.event_id)
+        if event.event_id and str(event.event_id) != "unknown"
+        else None
+    )
     cert = Certificate(
         shape=shape.name,
         event_id=str(event.event_id),
         relation=event_rel or event.relation,
         decision_kind=DecisionKind.PRESERVE,
         reason_code="",
+        boundary_clock=resolved_clock,
     )
 
     if not shape.is_supported:

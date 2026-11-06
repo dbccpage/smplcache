@@ -2,9 +2,9 @@ name: SmplCache CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "overnight/**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "overnight/**" ]
 
 jobs:
   build:
@@ -25,7 +25,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[dev,demo,numpy]"
+        pip install -e ".[dev,demo,numpy,duckdb]"
 
     - name: Check code formatting
       run: |
@@ -36,10 +36,85 @@ jobs:
 
     - name: Test with pytest
       run: |
-        python -m pytest
+        python -m pytest --ignore=tests/test_live_containers.py
 
     - name: Clean venv install and CLI smoke test
       run: |
         python -m venv /tmp/smoke_venv
         /tmp/smoke_venv/bin/pip install .
         /tmp/smoke_venv/bin/smplcache report examples/workload.common.json
+
+  live-databases:
+    name: Live Database Containers (PostgreSQL 16 + SQL Server 2022 + MongoDB 7)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })' --quiet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Start SQL Server 2022 container and wait for readiness
+      run: |
+        docker run -d --name mssql2022 \
+          -e "ACCEPT_EULA=Y" \
+          -e "MSSQL_SA_PASSWORD=SmplCache!StrongPass2026" \
+          -e "MSSQL_PID=Developer" \
+          -p 1433:1433 \
+          mcr.microsoft.com/mssql/server:2022-latest
+        for i in $(seq 1 45); do
+          if docker exec mssql2022 /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'SmplCache!StrongPass2026' -C -Q "SELECT 1" >/dev/null 2>&1 || \
+             docker exec mssql2022 /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'SmplCache!StrongPass2026' -Q "SELECT 1" >/dev/null 2>&1; then
+            echo "SQL Server 2022 is ready."
+            break
+          fi
+          sleep 2
+        done
+
+    - name: Install dependencies and live database drivers
+      run: |
+        sudo apt-get update && sudo apt-get install -y freetds-dev
+        python -m pip install --upgrade pip
+        pip install -e ".[dev,demo,numpy,duckdb,live]"
+
+    - name: Run live PostgreSQL 16, SQL Server 2022, and MongoDB 7 integration tests
+      env:
+        REQUIRE_LIVE_DB_TESTS: "1"
+        PGHOST: "127.0.0.1"
+        PGPORT: "5432"
+        PGUSER: "postgres"
+        PGPASSWORD: "postgres"
+        PGDATABASE: "postgres"
+        MSSQL_HOST: "127.0.0.1"
+        MSSQL_PORT: "1433"
+        MSSQL_USER: "sa"
+        MSSQL_SA_PASSWORD: "SmplCache!StrongPass2026"
+        MONGO_HOST: "127.0.0.1"
+        MONGO_PORT: "27017"
+      run: |
+        python -m pytest tests/test_live_containers.py -v
