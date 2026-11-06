@@ -762,9 +762,11 @@ def _format_step_change_sql(step: Mapping[str, Any]) -> str:
         p_map = dict(params or {})
         rendered = re.sub(
             r":([a-zA-Z_][a-zA-Z0-9_]*)",
-            lambda m: _format_sql_param_literal(p_map[m.group(1)])
-            if m.group(1) in p_map
-            else m.group(0),
+            lambda m: (
+                _format_sql_param_literal(p_map[m.group(1)])
+                if m.group(1) in p_map
+                else m.group(0)
+            ),
             str(stmt_tpl),
         )
         rendered_stmts.append(" ".join(rendered.split()))

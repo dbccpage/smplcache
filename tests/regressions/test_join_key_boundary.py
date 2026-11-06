@@ -294,7 +294,9 @@ def test_non_pk_join_columns_customers_region_id_and_orders_customer_id_never_cl
     cli_cust_shape = _shape_from_dict(
         {"name": "rev_by_region_cust", "relation": "customers", "sql": sql}
     )
-    assert cli_cust_shape.dependency_set()["join_keys"] == frozenset({"id", "region_id"})
+    assert cli_cust_shape.dependency_set()["join_keys"] == frozenset(
+        {"id", "region_id"}
+    )
     assert "region_id" in cli_cust_shape.fingerprint()
     assert certify_event(cli_cust_shape, evt_cust_region).kind != DecisionKind.PRESERVE
 

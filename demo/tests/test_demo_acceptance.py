@@ -669,4 +669,3 @@ console.log(JSON.stringify({
         assert "size: 100" in out["recordText"]
         assert "step: 3" in out["recordText"]
         assert "move: FIX IN PLACE" in out["recordText"]
-
