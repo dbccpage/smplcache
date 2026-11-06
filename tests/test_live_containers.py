@@ -189,10 +189,8 @@ def test_live_postgres16_3nf_lift_wal_and_cold_rebuild() -> None:
             )
             wal_proc = WalStreamProcessor(
                 shape=jshape,
-                cache=AggregateCache(
-                    dict(pool.caches[jshape.name].values),
-                    dict(pool.caches[jshape.name]._group_state),
-                    True,
+                cache=AggregateCache.from_group_state(
+                    jshape, pool.caches[jshape.name]._group_state
                 ),
                 aux_state=pool.aux_state,
                 numeric_cols=frozenset({"amount"}),
