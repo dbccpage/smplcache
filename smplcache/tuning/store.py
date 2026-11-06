@@ -2,7 +2,7 @@
 # Copyright: Copyright 2026 Jeremy Carroll
 """Store adapters that apply certified decisions to real cache keys and keep a receipt per key.
 
-Ported from `anomalon/omega_simplex_cache/store_adapter.py` (read-only
+Ported from the anomalon repository's `store_adapter.py` (read-only
 reference) with the imports pointed at `smplcache.smplcache`. Behaviour kept:
 
 - the adapters have no repair executor, so a proposed REPAIR is applied as an
