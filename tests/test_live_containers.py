@@ -189,13 +189,16 @@ def test_live_postgres16_3nf_lift_wal_and_cold_rebuild() -> None:
             )
             wal_proc = WalStreamProcessor(
                 shape=jshape,
-                cache=AggregateCache.from_group_state(
-                    jshape, pool.caches[jshape.name]._group_state
-                ),
                 aux_state=pool.aux_state,
                 numeric_cols=frozenset({"amount"}),
             )
-            assert wal_proc.feed({"status": "BEGIN", "id": "501", "lsn": 1000}) == []
+            wal_cache = AggregateCache.from_group_state(
+                jshape, pool.caches[jshape.name]._group_state
+            )
+            decs_begin, wal_cache = wal_proc.ingest(
+                {"status": "BEGIN", "id": "501", "lsn": 1000}, wal_cache
+            )
+            assert decs_begin == []
             assert wal_proc.boundary_clock == "1000"
             data_env = encode_debezium_envelope(
                 WriteEvent(
@@ -206,11 +209,14 @@ def test_live_postgres16_3nf_lift_wal_and_cold_rebuild() -> None:
                 tx_id="501",
                 lsn=1001,
             )
-            assert wal_proc.feed(data_env) == []
-            assert wal_proc.boundary_clock == "1001"
-            commit_decs = wal_proc.feed({"status": "COMMIT", "id": "501", "lsn": 1002})
+            decs_data, wal_cache = wal_proc.ingest(data_env, wal_cache)
+            assert decs_data == []
+            commit_decs, wal_cache = wal_proc.ingest(
+                {"status": "COMMIT", "id": "501", "lsn": 1002}, wal_cache
+            )
             assert len(commit_decs) == 1
-            assert commit_decs[0][1].kind == DecisionKind.PRESERVE
+            assert commit_decs[0].kind == DecisionKind.PRESERVE
+            assert commit_decs[0].certificate.boundary_clock == "1001"
             assert wal_proc.boundary_clock == "1002"
 
             ev_tier = adapt_wal_payload(data_env, numeric_cols={"amount"})
