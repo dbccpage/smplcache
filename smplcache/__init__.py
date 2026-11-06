@@ -17,6 +17,8 @@ from smplcache.smplcache import (
 from smplcache.debezium import (
     DEBEZIUM_UNAVAILABLE_VALUE,
     WAL2JSON_UNAVAILABLE_VALUE,
+    PostgresLogicalStreamDecoder,
+    PostgresWALMessage,
     WalParsedRecord,
     WalStreamProcessor,
     adapt_wal_payload,
@@ -115,10 +117,19 @@ from smplcache.normal_forms import (
     tableau_chase,
 )
 from smplcache.sqlshape import SqlShapeContext, check_cdc_evidence
+from smplcache.store_adapter import (
+    DEFAULT_MAX_CERTIFICATES,
+    InMemoryStoreAdapter,
+    RedisStoreAdapter,
+    RegisteredShapesRegistry,
+    SmplCacheStore,
+    StoreApplicationError,
+)
 from smplcache.substrate import ColdRebuildAdapter, ColdRebuildSubstrate, HAS_DUCKDB
 
 __all__ = [
     "DEFAULT_BUDGET_GRID",
+    "DEFAULT_MAX_CERTIFICATES",
     "DEBEZIUM_UNAVAILABLE_VALUE",
     "HAS_DUCKDB",
     "NULL_GROUP_KEY",
@@ -143,6 +154,7 @@ __all__ = [
     "ExtractorResult",
     "ForeignKeySpec",
     "FunctionalDependency",
+    "InMemoryStoreAdapter",
     "JoinAuxState",
     "JoinCacheManager",
     "JoinClause",
@@ -153,17 +165,23 @@ __all__ = [
     "NormalFormReport",
     "PhaseRotatedStreamBundle",
     "PhaseShiftSweepResult",
+    "PostgresLogicalStreamDecoder",
+    "PostgresWALMessage",
     "Predicate",
     "QueryShape",
     "RapidOscillationResult",
+    "RedisStoreAdapter",
     "RedundantGroupColReport",
+    "RegisteredShapesRegistry",
     "RelationalSchema",
     "SharedJoinAuxPool",
     "SharedPoolBenchmarkResult",
+    "SmplCacheStore",
     "SnowflakeStreamBundle",
     "SortedMultisetExtremumCache",
     "SqlDdlBundle",
     "SqlShapeContext",
+    "StoreApplicationError",
     "WalParsedRecord",
     "WalStreamProcessor",
     "WriteEvent",

@@ -39,7 +39,9 @@ Every CDC event against a registered Query Shape results in a `Decision` contain
 *   **`required_evidence`**: A list of column names or state keys strictly required to execute a `repair`. If a CDC event lacks these (e.g., missing an old row value), the decision defaults to `invalidate`.
 *   **`available_evidence`**: The keys available in the CDC event's `old` and `new` maps.
 *   **`repair_program`**: If the decision is `repair`, this indicates the certified aggregate or reduction program (e.g., `paid_sum_by_group_key`) that safely reconciles the boundary.
-*   **`boundary_clock`**: (Placeholder) Will hold the monotonic sequence number of the event for strict causal ordering and replay validation.
+*   **`boundary_clock`**: Monotonic LSN or sequence number of the event for causal ordering and replay validation.
+*   **`operation`**: Normalized CDC operation (`INSERT`, `UPDATE`, `DELETE`, `UNKNOWN`, etc.).
+*   **`old_image_complete` / `new_image_complete` / `changed_cols_complete`**: Explicit boolean flags recording whether the CDC producer supplied complete before/after row images and a complete changed-column set. See [CDC Evidence, Store Application, and Kernel Contracts](cdc_evidence_and_store_contracts.md).
 
 ## The Evidence Principle (Theorem 7)
 

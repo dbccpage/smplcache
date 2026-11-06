@@ -198,6 +198,7 @@ In accordance with the project Claim Hygiene Rule:
 - Mathematical foundations: `docs/smplcache_theory_quotient_repairability.md`
 - Dependency fingerprinting: `docs/dependency_fingerprinting.md`
 - Invalidation rules: `docs/invalidation_rules.md`
+- [CDC Evidence, Store Application, and Kernel Contracts](docs/cdc_evidence_and_store_contracts.md)
 
 ## License
 Apache 2.0 License. See [LICENSE](LICENSE).

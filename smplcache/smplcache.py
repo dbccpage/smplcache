@@ -132,14 +132,46 @@ def _aggregate_decimal(val: Any) -> Decimal:
     return _to_decimal(val)
 
 
-def _values_equal(a: Any, b: Any) -> bool:
+def _supported_row_value(val: Any, depth: int = 0) -> bool:
+    if depth > 64:
+        return False
+    val_type = type(val)
+    if val is None or val_type in (bool, int, str):
+        return True
+    if isinstance(val, Decimal):
+        return val.is_finite()
+    if val_type is float:
+        return not (val != val or val == float("inf") or val == float("-inf"))
+    if val_type in (list, tuple):
+        return all(_supported_row_value(item, depth + 1) for item in val)
+    if val_type is dict:
+        return all(
+            type(k) is str and _supported_row_value(v, depth + 1)
+            for k, v in val.items()
+        )
+    return False
+
+
+def _values_equal(a: Any, b: Any, depth: int = 0) -> bool:
+    if depth > 64:
+        return False
     if a is None and b is None:
         return True
     if a is None or b is None:
         return False
     if isinstance(a, bool) or isinstance(b, bool):
         return type(a) is type(b) and a == b
+    if type(a) is dict and type(b) is dict:
+        return a.keys() == b.keys() and all(
+            _values_equal(v, b[k], depth + 1) for k, v in a.items()
+        )
+    if type(a) in (list, tuple) and type(b) is type(a):
+        return len(a) == len(b) and all(
+            _values_equal(x, y, depth + 1) for x, y in zip(a, b)
+        )
     if _is_numeric_non_bool(a) and _is_numeric_non_bool(b):
+        if type(a) is not type(b) and (isinstance(a, float) or isinstance(b, float)):
+            return False
         try:
             return _to_decimal(a) == _to_decimal(b)
         except (TypeError, ValueError, InvalidOperation):
@@ -167,6 +199,10 @@ class Certificate:
     available_evidence: list[str] = field(default_factory=list)
     repair_program: str | None = None
     boundary_clock: str | None = None
+    operation: str = "UNKNOWN"
+    old_image_complete: bool = False
+    new_image_complete: bool = False
+    changed_cols_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -320,9 +356,17 @@ class QueryShape:
         predicate_cols: Iterable[str] | None = None,
         aggregate_cols: Iterable[str] | None = None,
         join_cols: Iterable[str] | None = None,
+        aggregate_function: str | None = None,
+        predicate_equals: Mapping[str, Any] | None = None,
         is_supported: bool = True,
         unsupported_reason: str = "",
     ) -> None:
+        if agg_fn is None and aggregate_function is not None:
+            agg_fn = aggregate_function
+        if predicate is None and predicate_equals is not None:
+            predicate = Predicate(
+                tuple((str(k).lower(), "=", v) for k, v in predicate_equals.items())
+            )
         norm_rel = normalize_relation(relation)
         norm_groups = tuple(str(c).lower() for c in group_cols)
         explicit_projs = frozenset(str(c).lower() for c in projection_cols)
@@ -439,17 +483,81 @@ class QueryShape:
         return tuple(_checked_group_atom(lower_row.get(col)) for col in self.group_cols)
 
 
-@dataclass
+@dataclass(init=False)
 class WriteEvent:
     relation: str
-    changed_cols: set[str] = field(default_factory=set)
-    old: dict[str, Any] = field(default_factory=dict)
-    new: dict[str, Any] = field(default_factory=dict)
-    event_id: str = "unknown"
-    explicit_operation: str | None = None
-    unavailable_cols: set[str] = field(default_factory=set)
-    schema_change: bool = False
-    boundary_clock: str | None = None
+    changed_cols: set[str]
+    old: dict[str, Any]
+    new: dict[str, Any]
+    event_id: str
+    explicit_operation: str | None
+    unavailable_cols: set[str]
+    schema_change: bool
+    boundary_clock: str | None
+    old_image_complete: bool | None
+    new_image_complete: bool | None
+    changed_cols_complete: bool | None
+
+    def __init__(
+        self,
+        relation: str,
+        changed_cols: set[str] | Iterable[str] | None = None,
+        old: dict[str, Any] | None = None,
+        new: dict[str, Any] | None = None,
+        event_id: str = "unknown",
+        explicit_operation: str | None = None,
+        unavailable_cols: set[str] | Iterable[str] | None = None,
+        schema_change: bool = False,
+        boundary_clock: str | None = None,
+        *,
+        operation: str | None = None,
+        old_image_complete: bool | None = None,
+        new_image_complete: bool | None = None,
+        changed_cols_complete: bool | None = None,
+    ) -> None:
+        for flag_name, flag_val in (
+            ("old_image_complete", old_image_complete),
+            ("new_image_complete", new_image_complete),
+            ("changed_cols_complete", changed_cols_complete),
+            ("schema_change", schema_change),
+        ):
+            if flag_val is not None and type(flag_val) is not bool:
+                raise TypeError(f"{flag_name} requires an exact bool")
+
+        if operation is not None:
+            if type(operation) is not str:
+                raise TypeError("operation must be a string")
+            op_upper = operation.upper()
+            if op_upper not in {
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "UNKNOWN",
+                "TRUNCATE",
+                "SCHEMA_CHANGE",
+                "DDL",
+                "TX_VIOLATION",
+                "BEGIN",
+                "COMMIT",
+                "ROLLBACK",
+            }:
+                raise ValueError("unsupported operation")
+            explicit_operation = op_upper
+
+        self.relation = relation
+        self.changed_cols = set(changed_cols) if changed_cols is not None else set()
+        self.old = dict(old) if old is not None else {}
+        self.new = dict(new) if new is not None else {}
+        self.event_id = event_id
+        self.explicit_operation = explicit_operation
+        self.unavailable_cols = (
+            set(unavailable_cols) if unavailable_cols is not None else set()
+        )
+        self.schema_change = schema_change
+        self.boundary_clock = boundary_clock
+        self.old_image_complete = old_image_complete
+        self.new_image_complete = new_image_complete
+        self.changed_cols_complete = changed_cols_complete
 
     @property
     def operation(self) -> str:
@@ -820,6 +928,20 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
     if explicit_op == "TRUNCATE":
         return Decision.invalidate("truncate_event", cert)
 
+    has_completeness_flags = (
+        event.old_image_complete is not None
+        or event.new_image_complete is not None
+        or event.changed_cols_complete is not None
+    )
+    if has_completeness_flags:
+        cert.operation = event.operation
+        cert.old_image_complete = bool(event.old_image_complete)
+        cert.new_image_complete = bool(event.new_image_complete)
+        cert.changed_cols_complete = bool(event.changed_cols_complete)
+
+    if explicit_op == "UNKNOWN":
+        return Decision.invalidate("unknown_operation", cert)
+
     if explicit_op and explicit_op not in ("INSERT", "UPDATE", "DELETE"):
         return Decision.invalidate("unsupported_event_operation", cert)
 
@@ -839,6 +961,38 @@ def certify_event(shape: QueryShape, event: WriteEvent) -> Decision:
             return Decision.invalidate("invalid_evidence_type", cert)
         if any(isinstance(row.get(col), float) for col in shape.predicate.columns):
             return Decision.invalidate("invalid_evidence_type", cert)
+
+    if not (
+        all(_supported_row_value(v) for v in old_map.values())
+        and all(_supported_row_value(v) for v in new_map.values())
+    ):
+        return Decision.invalidate("unsupported_row_value", cert)
+
+    if has_completeness_flags:
+        eff_op = explicit_op or event.operation
+        if eff_op == "UPDATE":
+            if not (event.old_image_complete and event.new_image_complete):
+                return Decision.invalidate("incomplete_update_images", cert)
+            if event.changed_cols_complete is False:
+                return Decision.invalidate("unknown_changed_columns", cert)
+            if not (shape.fingerprint() <= old_map.keys()):
+                return Decision.invalidate("missing_evidence_old", cert)
+            if not (shape.fingerprint() <= new_map.keys()):
+                return Decision.invalidate("missing_evidence_new", cert)
+        elif eff_op == "INSERT":
+            if old_map or not event.new_image_complete:
+                return Decision.invalidate(
+                    "incomplete_or_conflicting_insert_image", cert
+                )
+            if not (shape.fingerprint() <= new_map.keys()):
+                return Decision.invalidate("missing_evidence_new", cert)
+        elif eff_op == "DELETE":
+            if new_map or not event.old_image_complete:
+                return Decision.invalidate(
+                    "incomplete_or_conflicting_delete_image", cert
+                )
+            if not (shape.fingerprint() <= old_map.keys()):
+                return Decision.invalidate("missing_evidence_old", cert)
 
     if unavail_cols & shape.security_cols:
         return Decision.invalidate("security_column_changed", cert)
