@@ -29,11 +29,220 @@ from demo.scenarios.runner import (
     get_scenarios_metadata,
     get_version_metadata,
 )
+from smplcache.cli import _inspect_sql_ast_doctor, _parse_fds_from_raw, _shape_from_dict
+from smplcache.normal_forms import (
+    RelationalSchema,
+    candidate_keys,
+    classify_normal_form,
+    decompose_bcnf,
+    detect_fd_redundant_group_cols,
+    generate_sql_ddl,
+    minimal_cover,
+    synthesize_3nf,
+    tableau_chase,
+)
+from smplcache.smplcache import normalize_relation
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024
 MAX_CONCURRENT_RUNS = 8
 RATE_LIMIT_WINDOW_SECONDS = 60.0
 RATE_LIMIT_MAX_REQUESTS = 120
+
+NORMALIZE_PRESETS: dict[str, dict[str, Any]] = {
+    "orders_2nf_lift": {
+        "preset_id": "orders_2nf_lift",
+        "label": "2NF Transitive Dependency (Orders -> Customers -> Regions)",
+        "relation_name": "orders_denorm",
+        "attributes": [
+            "order_id",
+            "customer_id",
+            "customer_tier",
+            "region_id",
+            "region_name",
+            "status",
+            "amount_cents",
+        ],
+        "functional_dependencies": [
+            "order_id -> customer_id, status, amount_cents",
+            "customer_id -> customer_tier, region_id",
+            "region_id -> region_name",
+        ],
+        "query_sql": (
+            "SELECT customer_id, customer_tier, SUM(amount_cents) "
+            "FROM orders_denorm WHERE LOWER(status) = 'paid' "
+            "GROUP BY customer_id, customer_tier"
+        ),
+        "lossy_split": [
+            ["order_id", "region_name", "amount_cents"],
+            ["customer_id", "customer_tier", "region_id", "region_name", "status"],
+        ],
+    },
+    "supplier_bcnf_split": {
+        "preset_id": "supplier_bcnf_split",
+        "label": "3NF vs. BCNF Overlapping Candidate Keys (Supplier Parts)",
+        "relation_name": "supplier_parts",
+        "attributes": ["supplier_id", "supplier_name", "part_id", "quantity"],
+        "functional_dependencies": [
+            "supplier_id, part_id -> quantity, supplier_name",
+            "supplier_name, part_id -> quantity, supplier_id",
+            "supplier_name -> supplier_id",
+        ],
+        "query_sql": (
+            "SELECT supplier_name, supplier_id, SUM(quantity) "
+            "FROM supplier_parts GROUP BY supplier_name, supplier_id"
+        ),
+        "lossy_split": [
+            ["supplier_id", "quantity"],
+            ["supplier_name", "part_id", "quantity"],
+        ],
+    },
+}
+
+
+class NormalizeRequestPayload(BaseModel):
+    """
+    Bounded request payload for `POST /api/normalize`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    preset_id: Literal["orders_2nf_lift", "supplier_bcnf_split", "custom"] = (
+        "orders_2nf_lift"
+    )
+    dialect: Literal["postgres", "mssql"] = "postgres"
+    relation_name: str = Field(default="orders_denorm", min_length=1, max_length=64)
+    attributes: list[str] = Field(default_factory=list, max_length=24)
+    functional_dependencies: list[str] = Field(default_factory=list, max_length=32)
+    query_sql: str | None = Field(default=None, max_length=1024)
+    lossy_split: list[list[str]] | None = Field(default=None, max_length=8)
+
+
+def _execute_normalize(payload: NormalizeRequestPayload) -> dict[str, Any]:
+    preset = NORMALIZE_PRESETS.get(payload.preset_id)
+    if payload.preset_id != "custom" and preset is not None and not payload.attributes:
+        rel_name = normalize_relation(preset["relation_name"])
+        raw_attrs = list(preset["attributes"])
+        raw_fds = list(preset["functional_dependencies"])
+        query_sql = payload.query_sql or preset.get("query_sql")
+        lossy_split = payload.lossy_split or preset.get("lossy_split")
+    else:
+        rel_name = normalize_relation(payload.relation_name)
+        raw_attrs = [
+            str(a).strip().lower() for a in payload.attributes if str(a).strip()
+        ]
+        raw_fds = list(payload.functional_dependencies)
+        query_sql = payload.query_sql
+        lossy_split = payload.lossy_split
+
+    fds = _parse_fds_from_raw(raw_fds)
+    attr_set = {a.strip().lower() for a in raw_attrs if a.strip()}
+    for fd in fds:
+        attr_set.update(fd.determinant | fd.dependent)
+
+    if not attr_set:
+        raise ValueError("At least one attribute is required for normalization.")
+
+    schema = RelationalSchema(
+        name=rel_name or "relation",
+        attributes=frozenset(attr_set),
+        functional_dependencies=tuple(fds),
+    )
+
+    min_cov = minimal_cover(schema.functional_dependencies)
+    cks = candidate_keys(schema)
+    nf_rep = classify_normal_form(schema)
+    tables_3nf = synthesize_3nf(schema)
+    bcnf_res = decompose_bcnf(schema)
+    chase_3nf = tableau_chase(schema, [t.attributes for t in tables_3nf])
+    chase_bcnf = tableau_chase(schema, [t.attributes for t in bcnf_res.tables])
+    ddl_3nf = generate_sql_ddl(tables_3nf, dialect=payload.dialect).ddl_script
+    ddl_bcnf = generate_sql_ddl(bcnf_res.tables, dialect=payload.dialect).ddl_script
+
+    lossy_chase_info: dict[str, Any] | None = None
+    if lossy_split:
+        lossy_sets = [
+            frozenset(str(c).strip().lower() for c in sub if str(c).strip())
+            for sub in lossy_split
+            if sub
+        ]
+        if lossy_sets and frozenset().union(*lossy_sets) == schema.attributes:
+            lossy_chase = tableau_chase(schema, lossy_sets)
+            lossy_chase_info = {
+                "sub_relations": [sorted(s) for s in lossy_sets],
+                "is_lossless": lossy_chase.is_lossless,
+                "counterexample": lossy_chase.counterexample,
+            }
+
+    doctor_info: dict[str, Any] = {
+        "query_sql": query_sql,
+        "non_sargable": [],
+        "implicit_conversions": [],
+        "fd_redundant_group_cols": [],
+        "reduced_group_cols": [],
+    }
+    if isinstance(query_sql, str) and query_sql.strip():
+        shape_obj = _shape_from_dict(
+            {"name": "inspector_query", "relation": schema.name, "query": query_sql}
+        )
+        ns_list, ic_list = _inspect_sql_ast_doctor(
+            query_sql, "inspector_query", schema.name, {}
+        )
+        doctor_info["non_sargable"] = ns_list
+        doctor_info["implicit_conversions"] = ic_list
+        if shape_obj.group_cols and schema.functional_dependencies:
+            red_rep = detect_fd_redundant_group_cols(
+                shape_obj, schema.functional_dependencies
+            )
+            doctor_info["fd_redundant_group_cols"] = list(red_rep.redundant_group_cols)
+            doctor_info["reduced_group_cols"] = list(red_rep.minimal_group_cols)
+
+    return {
+        "preset_id": payload.preset_id,
+        "dialect": payload.dialect,
+        "relation": schema.name,
+        "attributes": sorted(schema.attributes),
+        "minimal_cover": [fd.format() for fd in min_cov],
+        "candidate_keys": [sorted(k) for k in cks],
+        "highest_normal_form": nf_rep.highest_normal_form,
+        "is_1nf": nf_rep.is_1nf,
+        "is_2nf": nf_rep.is_2nf,
+        "is_3nf": nf_rep.is_3nf,
+        "is_eknf": nf_rep.is_eknf,
+        "is_bcnf": nf_rep.is_bcnf,
+        "violations": list(nf_rep.violations),
+        "synthesis_3nf": {
+            "tables": [
+                {
+                    "name": t.name,
+                    "attributes": sorted(t.attributes),
+                    "candidate_keys": [sorted(k) for k in candidate_keys(t)],
+                }
+                for t in tables_3nf
+            ],
+            "is_lossless": chase_3nf.is_lossless,
+            "chase_steps": len(chase_3nf.steps),
+            "counterexample": chase_3nf.counterexample,
+            "ddl": ddl_3nf,
+        },
+        "decomposition_bcnf": {
+            "tables": [
+                {
+                    "name": t.name,
+                    "attributes": sorted(t.attributes),
+                    "candidate_keys": [sorted(k) for k in candidate_keys(t)],
+                }
+                for t in bcnf_res.tables
+            ],
+            "is_lossless": chase_bcnf.is_lossless,
+            "is_dependency_preserving": bcnf_res.is_dependency_preserving,
+            "lost_dependencies": [fd.format() for fd in bcnf_res.lost_dependencies],
+            "chase_steps": len(chase_bcnf.steps),
+            "counterexample": chase_bcnf.counterexample,
+            "ddl": ddl_bcnf,
+        },
+        "lossy_comparison": lossy_chase_info,
+        "doctor": doctor_info,
+    }
 
 
 class RunRequestPayload(BaseModel):
@@ -180,6 +389,26 @@ def create_app(
     @application.get("/api/scenarios")
     async def api_scenarios() -> dict[str, Any]:
         return get_scenarios_metadata()
+
+    @application.get("/api/normalize/presets")
+    async def api_normalize_presets() -> dict[str, Any]:
+        return {"presets": list(NORMALIZE_PRESETS.values())}
+
+    @application.post("/api/normalize")
+    async def api_normalize(
+        payload: NormalizeRequestPayload, request: Request
+    ) -> dict[str, Any]:
+        client_host = request.client.host if request.client else "local"
+        if not rate_limiter.allow(client_host):
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded for /api/normalize; please wait briefly.",
+            )
+        try:
+            async with run_semaphore:
+                return await asyncio.to_thread(_execute_normalize, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @application.post("/api/runs")
     async def api_runs(payload: RunRequestPayload, request: Request) -> dict[str, Any]:

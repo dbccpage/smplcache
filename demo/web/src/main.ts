@@ -12,6 +12,7 @@ import {
 import type {
   BoundaryTrace,
   CumulativeCounters,
+  NormalizeResponse,
   RunTraceResponse,
   SampleOrderRow,
   ScenarioId,
@@ -27,7 +28,11 @@ interface AppState {
   auxMaxTotalRows: number | null;
   currentStepIndex: number; // 0 = initial state, 1..N = boundaries[index - 1]
   isPlaying: boolean;
-  inspectorTab: "certificate" | "sql" | "architecture";
+  inspectorTab: "certificate" | "sql" | "normalizer" | "architecture";
+  normPresetId: "orders_2nf_lift" | "supplier_bcnf_split";
+  normDialect: "postgres" | "mssql";
+  normResult: NormalizeResponse | null;
+  normLoading: boolean;
   loading: boolean;
   error: string | null;
   copiedReplayNotice: boolean;
@@ -44,6 +49,10 @@ const state: AppState = {
   currentStepIndex: 1,
   isPlaying: false,
   inspectorTab: "certificate",
+  normPresetId: "orders_2nf_lift",
+  normDialect: "postgres",
+  normResult: null,
+  normLoading: false,
   loading: true,
   error: null,
   copiedReplayNotice: false,
@@ -189,11 +198,37 @@ async function fetchInitialAndRun(preserveStep = false): Promise<void> {
       );
     }
     state.loading = false;
+    if (!state.normResult) {
+      void fetchNormalize();
+    }
     syncUrlParams();
     renderApp();
   } catch (err) {
     state.loading = false;
     state.error = err instanceof Error ? err.message : String(err);
+    renderApp();
+  }
+}
+
+async function fetchNormalize(): Promise<void> {
+  state.normLoading = true;
+  renderApp();
+  try {
+    const resp = await fetch("/api/normalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preset_id: state.normPresetId,
+        dialect: state.normDialect,
+      }),
+    });
+    if (resp.ok) {
+      state.normResult = (await resp.json()) as NormalizeResponse;
+    }
+  } catch {
+    // non-fatal
+  } finally {
+    state.normLoading = false;
     renderApp();
   }
 }
@@ -863,6 +898,9 @@ function renderApp(): void {
           <button type="button" class="scenario-tab ${state.inspectorTab === "sql" ? "active" : ""}" data-inspector="sql">
             Inspect the SQL &amp; AST Allowlist Rejections
           </button>
+          <button type="button" class="scenario-tab ${state.inspectorTab === "normalizer" ? "active" : ""}" data-inspector="normalizer">
+            Schema Normalizer &amp; Doctor (3NF/BCNF + Tableau Chase)
+          </button>
           <button type="button" class="scenario-tab ${state.inspectorTab === "architecture" ? "active" : ""}" data-inspector="architecture">
             Architecture, Timings &amp; Scoped Claims
           </button>
@@ -940,6 +978,77 @@ function renderApp(): void {
                     )
                     .join("")}
                 </div>
+              </div>`
+            : ""
+        }
+
+        ${
+          state.inspectorTab === "normalizer"
+            ? `<div>
+                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:0.75rem; margin-bottom:0.75rem;">
+                  <label class="control-label">
+                    Schema Preset
+                    <select id="select-norm-preset" class="control-select" aria-label="Schema preset">
+                      <option value="orders_2nf_lift" ${state.normPresetId === "orders_2nf_lift" ? "selected" : ""}>E-Commerce Orders &amp; Customers (2NF → 3NF/BCNF Lift)</option>
+                      <option value="supplier_bcnf_split" ${state.normPresetId === "supplier_bcnf_split" ? "selected" : ""}>Supplier-Part-Warehouse (3NF vs BCNF Tradeoff)</option>
+                    </select>
+                  </label>
+                  <label class="control-label">
+                    SQL Dialect
+                    <select id="select-norm-dialect" class="control-select" aria-label="SQL dialect">
+                      <option value="postgres" ${state.normDialect === "postgres" ? "selected" : ""}>PostgreSQL 16</option>
+                      <option value="mssql" ${state.normDialect === "mssql" ? "selected" : ""}>SQL Server 2022 (T-SQL)</option>
+                    </select>
+                  </label>
+                  ${
+                    state.normResult
+                      ? `<span class="decision-badge badge-keep" style="font-size:0.75rem;">
+                          Current NF: ${escapeHtml(state.normResult.highest_normal_form)} · Tableau Chase: ${state.normResult.synthesis_3nf.is_lossless ? "Lossless (Checked)" : "Lossy"}
+                        </span>`
+                      : ""
+                  }
+                </div>
+                ${
+                  state.normLoading || !state.normResult
+                    ? `<div class="code-block">Evaluating functional dependency closure, Bernstein 3NF synthesis, Tsou-Fischer BCNF decomposition, and Tableau Chase...</div>`
+                    : `<div class="inspector-grid">
+                        <div>
+                          <h3 class="panel-title" style="margin-bottom:0.45rem;">Candidate Keys, Minimal Cover &amp; 3NF/BCNF Decomposition</h3>
+                          <pre class="code-block">${escapeHtml(
+                            JSON.stringify(
+                              {
+                                relation: state.normResult.relation,
+                                highest_normal_form: state.normResult.highest_normal_form,
+                                candidate_keys: state.normResult.candidate_keys,
+                                minimal_cover: state.normResult.minimal_cover,
+                                violations: state.normResult.violations,
+                                synthesis_3nf: {
+                                  tables: state.normResult.synthesis_3nf.tables,
+                                  is_lossless: state.normResult.synthesis_3nf.is_lossless,
+                                  chase_steps: state.normResult.synthesis_3nf.chase_steps,
+                                },
+                                decomposition_bcnf: {
+                                  tables: state.normResult.decomposition_bcnf.tables,
+                                  is_lossless: state.normResult.decomposition_bcnf.is_lossless,
+                                  is_dependency_preserving:
+                                    state.normResult.decomposition_bcnf.is_dependency_preserving,
+                                  lost_dependencies:
+                                    state.normResult.decomposition_bcnf.lost_dependencies,
+                                },
+                                lossy_comparison: state.normResult.lossy_comparison,
+                                doctor: state.normResult.doctor,
+                              },
+                              null,
+                              2
+                            )
+                          )}</pre>
+                        </div>
+                        <div>
+                          <h3 class="panel-title" style="margin-bottom:0.45rem;">Generated ${state.normResult.dialect === "mssql" ? "SQL Server 2022" : "PostgreSQL 16"} Migration DDL (with FK Covering Indexes)</h3>
+                          <pre class="code-block">${escapeHtml(state.normResult.synthesis_3nf.ddl)}</pre>
+                        </div>
+                      </div>`
+                }
               </div>`
             : ""
         }
@@ -1111,13 +1220,40 @@ function bindEvents(): void {
       const tab = btn.getAttribute("data-inspector") as
         | "certificate"
         | "sql"
+        | "normalizer"
         | "architecture"
         | null;
       if (tab) {
         state.inspectorTab = tab;
-        renderApp();
+        if (tab === "normalizer" && !state.normResult && !state.normLoading) {
+          void fetchNormalize();
+        } else {
+          renderApp();
+        }
       }
     });
+  });
+
+  const normPresetSel = document.getElementById(
+    "select-norm-preset"
+  ) as HTMLSelectElement | null;
+  normPresetSel?.addEventListener("change", () => {
+    const val = normPresetSel.value;
+    if (val === "orders_2nf_lift" || val === "supplier_bcnf_split") {
+      state.normPresetId = val;
+      void fetchNormalize();
+    }
+  });
+
+  const normDialectSel = document.getElementById(
+    "select-norm-dialect"
+  ) as HTMLSelectElement | null;
+  normDialectSel?.addEventListener("change", () => {
+    const val = normDialectSel.value;
+    if (val === "postgres" || val === "mssql") {
+      state.normDialect = val;
+      void fetchNormalize();
+    }
   });
 
   const sizeSel = document.getElementById(

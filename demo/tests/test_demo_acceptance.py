@@ -669,3 +669,36 @@ console.log(JSON.stringify({
         assert "size: 100" in out["recordText"]
         assert "step: 3" in out["recordText"]
         assert "move: FIX IN PLACE" in out["recordText"]
+
+
+def test_normalize_api_and_normalizer_tab_contracts() -> None:
+    presets_resp = client.get("/api/normalize/presets")
+    assert presets_resp.status_code == 200
+    presets = presets_resp.json()["presets"]
+    preset_ids = {p["preset_id"] for p in presets}
+    assert {"orders_2nf_lift", "supplier_bcnf_split"} <= preset_ids
+
+    for preset_id in ("orders_2nf_lift", "supplier_bcnf_split"):
+        for dialect in ("postgres", "mssql"):
+            resp = client.post(
+                "/api/normalize",
+                json={"preset_id": preset_id, "dialect": dialect},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["preset_id"] == preset_id
+            assert data["dialect"] == dialect
+            assert data["synthesis_3nf"]["is_lossless"] is True
+            assert data["decomposition_bcnf"]["is_lossless"] is True
+            assert "CREATE TABLE" in data["synthesis_3nf"]["ddl"]
+            if preset_id == "orders_2nf_lift":
+                assert data["highest_normal_form"] == "2NF"
+                assert data["lossy_comparison"]["is_lossless"] is False
+                assert data["lossy_comparison"]["counterexample"] is not None
+                assert len(data["doctor"]["fd_redundant_group_cols"]) >= 1
+
+    web_src = Path(__file__).resolve().parent.parent / "web" / "src" / "main.ts"
+    assert (
+        "Schema Normalizer &amp; Doctor (3NF/BCNF + Tableau Chase)"
+        in web_src.read_text(encoding="utf-8")
+    )

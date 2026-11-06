@@ -188,6 +188,7 @@ class WalParsedRecord:
     event: WriteEvent | None = None
     relation: str = ""
     column_types: dict[str, str] = field(default_factory=dict)
+    lsn: str | None = None
 
 
 def parse_wal_record(
@@ -206,8 +207,14 @@ def parse_wal_record(
             event_id="malformed_payload",
             explicit_operation="SCHEMA_CHANGE",
             schema_change=True,
+            boundary_clock="malformed_payload",
         )
-        return WalParsedRecord(record_kind="SCHEMA_CHANGE", event=evt, relation="*")
+        return WalParsedRecord(
+            record_kind="SCHEMA_CHANGE",
+            event=evt,
+            relation="*",
+            lsn="malformed_payload",
+        )
 
     toast_placeholders = frozenset(
         {toast_placeholder, DEBEZIUM_UNAVAILABLE_VALUE, WAL2JSON_UNAVAILABLE_VALUE}
@@ -233,17 +240,27 @@ def parse_wal_record(
         and "op" not in body
     ):
         tx_id = str(body.get("id")) if body.get("id") is not None else None
+        tx_lsn = (
+            str(body.get("lsn", body.get("ts_ms", tx_id)))
+            if (
+                body.get("lsn") is not None
+                or body.get("ts_ms") is not None
+                or tx_id is not None
+            )
+            else None
+        )
         evt_cnt_raw = body.get("event_count")
         evt_cnt = int(evt_cnt_raw) if isinstance(evt_cnt_raw, int) else None
         if tx_status == "BEGIN":
-            return WalParsedRecord(record_kind="BEGIN", tx_id=tx_id)
+            return WalParsedRecord(record_kind="BEGIN", tx_id=tx_id, lsn=tx_lsn)
         if tx_status in ("END", "COMMIT"):
             return WalParsedRecord(
                 record_kind="COMMIT",
                 tx_id=tx_id,
                 expected_event_count=evt_cnt,
+                lsn=tx_lsn,
             )
-        return WalParsedRecord(record_kind="ROLLBACK", tx_id=tx_id)
+        return WalParsedRecord(record_kind="ROLLBACK", tx_id=tx_id, lsn=tx_lsn)
 
     # 2. PostgreSQL wal2json v2 format (`action`: "B"|"C"|"R"|"I"|"U"|"D"|"T"|"M")
     if "action" in body and "op" not in body:
@@ -261,7 +278,7 @@ def parse_wal_record(
         )
 
         if action in ("B", "BEGIN"):
-            return WalParsedRecord(record_kind="BEGIN", tx_id=xid)
+            return WalParsedRecord(record_kind="BEGIN", tx_id=xid, lsn=lsn)
         if action in ("C", "COMMIT"):
             evt_cnt_raw = body.get("event_count")
             evt_cnt = int(evt_cnt_raw) if isinstance(evt_cnt_raw, int) else None
@@ -269,9 +286,10 @@ def parse_wal_record(
                 record_kind="COMMIT",
                 tx_id=xid,
                 expected_event_count=evt_cnt,
+                lsn=lsn,
             )
         if action in ("R", "ROLLBACK", "ABORT"):
-            return WalParsedRecord(record_kind="ROLLBACK", tx_id=xid)
+            return WalParsedRecord(record_kind="ROLLBACK", tx_id=xid, lsn=lsn)
 
         if action == "M":
             prefix = str(body.get("prefix", "")).lower()
@@ -286,12 +304,14 @@ def parse_wal_record(
                 event_id=lsn,
                 explicit_operation="SCHEMA_CHANGE",
                 schema_change=True,
+                boundary_clock=lsn,
             )
             return WalParsedRecord(
                 record_kind="SCHEMA_CHANGE",
                 tx_id=xid,
                 event=evt,
                 relation=normalize_relation(m_rel) or "*",
+                lsn=lsn,
             )
 
         if action == "T":
@@ -299,12 +319,14 @@ def parse_wal_record(
                 relation=full_rel,
                 event_id=lsn,
                 explicit_operation="TRUNCATE",
+                boundary_clock=lsn,
             )
             return WalParsedRecord(
                 record_kind="DATA",
                 tx_id=xid,
                 event=evt,
                 relation=normalize_relation(full_rel),
+                lsn=lsn,
             )
 
         w_old: dict[str, Any] = {}
@@ -383,6 +405,7 @@ def parse_wal_record(
             explicit_operation=exp_op,
             unavailable_cols=w_unavail,
             schema_change=(exp_op == "SCHEMA_CHANGE"),
+            boundary_clock=lsn,
         )
         return WalParsedRecord(
             record_kind="SCHEMA_CHANGE" if exp_op == "SCHEMA_CHANGE" else "DATA",
@@ -390,6 +413,7 @@ def parse_wal_record(
             event=evt,
             relation=normalize_relation(full_rel),
             column_types=w_col_types,
+            lsn=lsn,
         )
 
     # 3. Explicit Debezium DDL / Schema Change event (`ddl` or `tableChanges`)
@@ -418,12 +442,14 @@ def parse_wal_record(
             event_id=lsn,
             explicit_operation="SCHEMA_CHANGE",
             schema_change=True,
+            boundary_clock=lsn,
         )
         return WalParsedRecord(
             record_kind="SCHEMA_CHANGE",
             tx_id=tx_id,
             event=evt,
             relation=normalize_relation(full_rel) or "*",
+            lsn=lsn,
         )
 
     # 4. Standard Debezium Change Event (`op`: "c"|"r"|"u"|"d"|"t"|"m")
@@ -451,12 +477,20 @@ def parse_wal_record(
         or body.get("event_id")
         or "debezium_evt"
     )
+    lsn_val = str(
+        source.get("lsn")
+        or source.get("commit_lsn")
+        or source.get("change_lsn")
+        or tx_block.get("id")
+        or event_id
+    )
 
     if op_code == "t":
         evt = WriteEvent(
             relation=full_rel,
             event_id=event_id,
             explicit_operation="TRUNCATE",
+            boundary_clock=lsn_val,
         )
         return WalParsedRecord(
             record_kind="DATA",
@@ -464,6 +498,7 @@ def parse_wal_record(
             event=evt,
             relation=normalize_relation(full_rel),
             column_types=col_types,
+            lsn=lsn_val,
         )
 
     if op_code == "m":
@@ -480,12 +515,14 @@ def parse_wal_record(
             event_id=event_id,
             explicit_operation="SCHEMA_CHANGE",
             schema_change=True,
+            boundary_clock=lsn_val,
         )
         return WalParsedRecord(
             record_kind="SCHEMA_CHANGE",
             tx_id=tx_id,
             event=evt,
             relation=normalize_relation(m_rel) or "*",
+            lsn=lsn_val,
         )
 
     before_raw = body.get("before")
@@ -521,6 +558,7 @@ def parse_wal_record(
         explicit_operation=exp_op,
         unavailable_cols=unavail_all,
         schema_change=(exp_op == "SCHEMA_CHANGE"),
+        boundary_clock=lsn_val,
     )
     return WalParsedRecord(
         record_kind="SCHEMA_CHANGE" if exp_op == "SCHEMA_CHANGE" else "DATA",
@@ -528,6 +566,7 @@ def parse_wal_record(
         event=evt,
         relation=normalize_relation(full_rel),
         column_types=col_types,
+        lsn=lsn_val,
     )
 
 
@@ -548,10 +587,12 @@ def adapt_wal_payload(
     )
     if rec.event is not None:
         return rec.event
+    b_clock = str(rec.lsn or rec.tx_id or rec.record_kind)
     return WriteEvent(
         relation="*",
         event_id=str(rec.tx_id or rec.record_kind),
         explicit_operation=rec.record_kind,
+        boundary_clock=b_clock,
     )
 
 
@@ -574,6 +615,8 @@ class WalStreamProcessor:
     numeric_cols: frozenset[str] = field(default_factory=frozenset)
     strict_transactions: bool = False
     is_invalidated: bool = field(default=False, init=False)
+    last_boundary_clock: str | None = field(default=None, init=False)
+    _sequence_clock: int = field(default=0, init=False)
     _active_tx_id: str | None = field(default=None, init=False)
     _tx_buffer: list[WalParsedRecord] = field(default_factory=list, init=False)
     _known_table_types: dict[str, dict[str, str]] = field(
@@ -582,6 +625,29 @@ class WalStreamProcessor:
     _known_table_cols: dict[str, frozenset[str]] = field(
         default_factory=dict, init=False
     )
+
+    @property
+    def boundary_clock(self) -> str | None:
+        return self.last_boundary_clock
+
+    def _advance_boundary_clock(self, candidate: str | None = None) -> str:
+        self._sequence_clock += 1
+        clock = (
+            str(candidate)
+            if candidate is not None and str(candidate)
+            else f"seq:{self._sequence_clock}"
+        )
+        self.last_boundary_clock = clock
+        return clock
+
+    def _stamp_decision_clock(
+        self, dec: Decision, clock: str | None = None
+    ) -> Decision:
+        eff_clock = clock or dec.certificate.boundary_clock or self.last_boundary_clock
+        if eff_clock is not None:
+            dec.certificate.boundary_clock = str(eff_clock)
+            self.last_boundary_clock = str(eff_clock)
+        return dec
 
     def _shape_relation_name(self) -> str:
         if isinstance(self.shape, MultiTableJoinShape):
@@ -621,23 +687,31 @@ class WalStreamProcessor:
             return process_join_event(self.shape, cache, evt, self.aux_state)
         return process_event(self.shape, cache, evt)
 
-    def _make_tx_violation_decision(self, reason: str, tx_id: str | None) -> Decision:
+    def _make_tx_violation_decision(
+        self, reason: str, tx_id: str | None, lsn: str | None = None
+    ) -> Decision:
+        clock = self._advance_boundary_clock(lsn or tx_id)
         cert = Certificate(
             shape=self.shape.name,
             event_id=str(tx_id or "tx_boundary"),
             relation=self._shape_relation_name(),
             decision_kind=DecisionKind.INVALIDATE,
             reason_code=reason,
+            boundary_clock=clock,
         )
         return Decision.invalidate(reason, cert)
 
-    def _make_preserve_tx_decision(self, reason: str, tx_id: str | None) -> Decision:
+    def _make_preserve_tx_decision(
+        self, reason: str, tx_id: str | None, lsn: str | None = None
+    ) -> Decision:
+        clock = self._advance_boundary_clock(lsn or tx_id)
         cert = Certificate(
             shape=self.shape.name,
             event_id=str(tx_id or "tx_boundary"),
             relation=self._shape_relation_name(),
             decision_kind=DecisionKind.PRESERVE,
             reason_code=reason,
+            boundary_clock=clock,
         )
         return Decision.preserve(reason, cert)
 
@@ -685,23 +759,34 @@ class WalStreamProcessor:
         cache: AggregateCache,
         on_invalidate: InvalidateCallback | None = None,
     ) -> tuple[Decision, AggregateCache]:
+        rec_clock = self._advance_boundary_clock(
+            rec.lsn
+            or (rec.event.boundary_clock if rec.event else None)
+            or (str(rec.event.event_id) if rec.event else None)
+            or rec.tx_id
+        )
         if self._check_implicit_schema_evolution(rec):
             schema_evt = WriteEvent(
                 relation=rec.relation or "*",
                 event_id=rec.event.event_id if rec.event else "schema_drift",
                 explicit_operation="SCHEMA_CHANGE",
                 schema_change=True,
+                boundary_clock=rec_clock,
             )
-            dec = self._certify_only(schema_evt)
+            dec = self._stamp_decision_clock(self._certify_only(schema_evt), rec_clock)
             if dec.kind == DecisionKind.INVALIDATE:
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
             return dec, cache
 
         assert rec.event is not None
         if self.is_invalidated:
-            dec = self._make_tx_violation_decision("cache_requires_rebuild", rec.tx_id)
+            dec = self._make_tx_violation_decision(
+                "cache_requires_rebuild", rec.tx_id, rec_clock
+            )
             return dec, self._invoke_on_invalidate(cache, on_invalidate)
-        dec = self._process_only(cache, rec.event)
+        dec = self._stamp_decision_clock(
+            self._process_only(cache, rec.event), rec_clock
+        )
         if dec.kind in (DecisionKind.INVALIDATE, DecisionKind.UNSUPPORTED):
             cache = self._invoke_on_invalidate(cache, on_invalidate)
         return dec, cache
@@ -729,10 +814,11 @@ class WalStreamProcessor:
                 self._tx_buffer.clear()
                 self._active_tx_id = None
                 dec = self._make_tx_violation_decision(
-                    "transaction_boundary_violation", rec.tx_id
+                    "transaction_boundary_violation", rec.tx_id, rec.lsn
                 )
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
                 return [dec], cache
+            self._advance_boundary_clock(rec.lsn or rec.tx_id)
             self._active_tx_id = rec.tx_id or "__anonymous_tx__"
             self._tx_buffer = []
             return [], cache
@@ -741,12 +827,14 @@ class WalStreamProcessor:
             if self._active_tx_id is None:
                 if self.strict_transactions:
                     dec = self._make_tx_violation_decision(
-                        "transaction_boundary_violation", rec.tx_id
+                        "transaction_boundary_violation", rec.tx_id, rec.lsn
                     )
                     cache = self._invoke_on_invalidate(cache, on_invalidate)
                     return [dec], cache
                 return [
-                    self._make_preserve_tx_decision("transaction_rollback", rec.tx_id)
+                    self._make_preserve_tx_decision(
+                        "transaction_rollback", rec.tx_id, rec.lsn
+                    )
                 ], cache
 
             if (
@@ -757,7 +845,7 @@ class WalStreamProcessor:
                 self._tx_buffer.clear()
                 self._active_tx_id = None
                 dec = self._make_tx_violation_decision(
-                    "transaction_boundary_violation", rec.tx_id
+                    "transaction_boundary_violation", rec.tx_id, rec.lsn
                 )
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
                 return [dec], cache
@@ -765,13 +853,15 @@ class WalStreamProcessor:
             self._tx_buffer.clear()
             self._active_tx_id = None
             return [
-                self._make_preserve_tx_decision("transaction_rollback", rec.tx_id)
+                self._make_preserve_tx_decision(
+                    "transaction_rollback", rec.tx_id, rec.lsn
+                )
             ], cache
 
         if rec.record_kind == "COMMIT":
             if self._active_tx_id is None:
                 dec = self._make_tx_violation_decision(
-                    "transaction_boundary_violation", rec.tx_id
+                    "transaction_boundary_violation", rec.tx_id, rec.lsn
                 )
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
                 return [dec], cache
@@ -784,7 +874,7 @@ class WalStreamProcessor:
                 self._tx_buffer.clear()
                 self._active_tx_id = None
                 dec = self._make_tx_violation_decision(
-                    "transaction_boundary_violation", rec.tx_id
+                    "transaction_boundary_violation", rec.tx_id, rec.lsn
                 )
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
                 return [dec], cache
@@ -796,7 +886,7 @@ class WalStreamProcessor:
                 self._tx_buffer.clear()
                 self._active_tx_id = None
                 dec = self._make_tx_violation_decision(
-                    "transaction_boundary_violation", rec.tx_id
+                    "transaction_boundary_violation", rec.tx_id, rec.lsn
                 )
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
                 return [dec], cache
@@ -811,7 +901,7 @@ class WalStreamProcessor:
                 if tx_invalidated:
                     self._check_implicit_schema_evolution(item)
                     d = self._make_tx_violation_decision(
-                        "cache_requires_rebuild", item.tx_id
+                        "cache_requires_rebuild", item.tx_id, item.lsn
                     )
                     decisions.append(d)
                 else:
@@ -825,8 +915,12 @@ class WalStreamProcessor:
 
             if not decisions:
                 decisions.append(
-                    self._make_preserve_tx_decision("empty_transaction", rec.tx_id)
+                    self._make_preserve_tx_decision(
+                        "empty_transaction", rec.tx_id, rec.lsn
+                    )
                 )
+            elif rec.lsn is not None:
+                self._advance_boundary_clock(rec.lsn)
             return decisions, cache
 
         # DATA or SCHEMA_CHANGE record
@@ -839,7 +933,7 @@ class WalStreamProcessor:
                 self._tx_buffer.clear()
                 self._active_tx_id = None
                 dec = self._make_tx_violation_decision(
-                    "transaction_boundary_violation", rec.tx_id
+                    "transaction_boundary_violation", rec.tx_id, rec.lsn
                 )
                 cache = self._invoke_on_invalidate(cache, on_invalidate)
                 return [dec], cache
@@ -848,7 +942,7 @@ class WalStreamProcessor:
 
         if self.strict_transactions:
             dec = self._make_tx_violation_decision(
-                "transaction_boundary_violation", rec.tx_id
+                "transaction_boundary_violation", rec.tx_id, rec.lsn
             )
             cache = self._invoke_on_invalidate(cache, on_invalidate)
             return [dec], cache
