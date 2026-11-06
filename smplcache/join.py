@@ -1864,7 +1864,6 @@ def certify_join_event(
         event_rel != base_rel
         and join_key_changed
         and matched_facts > 0
-        and (old_contribs or new_contribs)
     ):
         cert.repair_program = f"join_{shape.agg_fn}_by_group"
         return Decision.repair("dimension_update", cert)

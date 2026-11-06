@@ -102,10 +102,13 @@ export interface BoundaryTrace {
   narration: string;
   table_written: string;
   operation: string;
+  change_sql?: string;
   highlighted_order_id: number | null;
   delta_summary: string;
   before_image: Record<string, unknown> | null;
   after_image: Record<string, unknown> | null;
+  cache_before?: Record<string, number> | null;
+  cache_after?: Record<string, number> | null;
   decision_kind: "preserve" | "repair" | "invalidate" | "unsupported";
   ui_badge:
     | "Preserve"

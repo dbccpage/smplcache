@@ -174,7 +174,7 @@ SCENARIO_CATALOG: dict[str, dict[str, Any]] = {
         ),
         "description": (
             "Single-table regional revenue dashboard in integer cents. Demonstrates "
-            "irrelevant delivery-note writes (Preserve), paid order amount edits (Repair), "
+            "irrelevant delivery-note writes (KEEP), paid order amount edits (FIX IN PLACE), "
             "predicate entry/exit, group moves, last-member group deletion, and "
             "missing-evidence refusal + snapshot recovery."
         ),
@@ -209,7 +209,7 @@ SCENARIO_CATALOG: dict[str, dict[str, Any]] = {
             "Three-table foreign-key join (orders -> customers -> regions). Demonstrates "
             "dimension-table region moves with 1-to-k order fanout repair, multi-table "
             "COMMIT/ROLLBACK transactions, and capacity-triggered eviction fallback "
-            "when resident auxiliary row limits are lowered."
+            "when resident lookup row limits are lowered."
         ),
         "engine_components": [
             "parse_join_sql",
@@ -226,7 +226,7 @@ SCENARIO_CATALOG: dict[str, dict[str, Any]] = {
         "adverse_aux_max_total_rows": 60,
         "supports_aux_capacity": True,
         "capacity_disclosure": (
-            "Configured limit counts resident auxiliary rows in JoinAuxState. "
+            "Configured limit counts resident join lookup rows in memory. "
             "Eviction tombstones, foreign-key indexes, Count-Min Sketch counters, "
             "aggregate group state, and transient work also consume process memory; "
             "this row cap is not a total RAM limit."
@@ -282,7 +282,7 @@ def get_rejected_sql_examples() -> list[dict[str, Any]]:
             ),
             "explanation": (
                 "Window frames require full partition ordering/peer state and are "
-                "outside the admitted single-block SPJA fragment."
+                "outside the admitted single-block SELECT-FROM-JOIN-WHERE-GROUP BY fragment."
             ),
         },
         {
@@ -743,6 +743,43 @@ class _IndependentSqliteVerifier:
         return [dict(r) for r in rows]
 
 
+def _format_sql_param_literal(val: Any) -> str:
+    if val is None:
+        return "NULL"
+    if isinstance(val, bool):
+        return "1" if val else "0"
+    if isinstance(val, (int, float, Decimal)):
+        return str(val)
+    escaped = str(val).replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _format_step_change_sql(step: Mapping[str, Any]) -> str:
+    import re
+
+    rendered_stmts: list[str] = []
+    for stmt_tpl, params in step.get("sqlite_statements", []):
+        p_map = dict(params or {})
+        rendered = re.sub(
+            r":([a-zA-Z_][a-zA-Z0-9_]*)",
+            lambda m: _format_sql_param_literal(p_map[m.group(1)])
+            if m.group(1) in p_map
+            else m.group(0),
+            str(stmt_tpl),
+        )
+        rendered_stmts.append(" ".join(rendered.split()))
+
+    if not rendered_stmts:
+        return ""
+    commit = bool(step.get("sqlite_commit", True))
+    op = str(step.get("operation", "")).upper()
+    if not commit or op == "ROLLBACK":
+        return f"BEGIN; {'; '.join(rendered_stmts)}; ROLLBACK"
+    if len(rendered_stmts) > 1 or op == "BEGIN..COMMIT":
+        return f"BEGIN; {'; '.join(rendered_stmts)}; COMMIT"
+    return "; ".join(rendered_stmts)
+
+
 def _serialize_certificate(decision: Decision, boundary_index: int) -> dict[str, Any]:
     cert = decision.certificate
     return {
@@ -774,7 +811,7 @@ def _build_live_revenue_steps(
                 "Order #101's delivery note changes from 'Leave at front desk' to "
                 "'Ring bell on arrival'. Because notes is outside the query's "
                 "dependency fingerprint {region, status, amount_cents}, SmplCache "
-                "preserves the cached answer with 0 database queries while the "
+                "keeps the cached answer (KEEP) with 0 database queries while the "
                 "table-invalidation baseline reruns the SQL query."
             ),
             "table_written": "orders",
@@ -818,8 +855,8 @@ def _build_live_revenue_steps(
             "narration": (
                 "Paid Order #101 increases from $100.00 (10,000 cents) to $125.00 "
                 "(12,500 cents). Both old and new row images include region, status, "
-                "and amount_cents, so SmplCache applies a +$25.00 delta repair in "
-                "place without querying SQLite."
+                "and amount_cents, so SmplCache applies a +$25.00 delta update "
+                "(FIX IN PLACE) without querying SQLite."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -862,7 +899,7 @@ def _build_live_revenue_steps(
             "narration": (
                 "Order #102 ($80.00 in Europe) changes status from 'pending' to "
                 "'paid', entering the WHERE status = 'paid' filter. SmplCache "
-                "certifies predicate_entry and adds $80.00 to Europe in place."
+                "applies FIX IN PLACE (predicate_entry) and adds $80.00 to Europe."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -905,7 +942,7 @@ def _build_live_revenue_steps(
             "narration": (
                 "Paid Order #103 ($150.00) is reassigned from North America to "
                 "Europe. SmplCache subtracts $150.00 from North America and adds "
-                "$150.00 to Europe in a single group_move repair."
+                "$150.00 to Europe in a single FIX IN PLACE (group_move) update."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -947,7 +984,7 @@ def _build_live_revenue_steps(
             "action_label": "Delete Order #105 in Pilot Sandbox (-$45.00)",
             "narration": (
                 "Order #105 ($45.00) is the only paid order in the 'Pilot Sandbox' "
-                "group. Because AggregateCache tracks per-group row counts alongside "
+                "group. Because SmplCache tracks per-group row counts alongside "
                 "sums, deleting Order #105 cleanly removes the 'Pilot Sandbox' group "
                 "instead of leaving a stale zero or fabricated count."
             ),
@@ -982,8 +1019,8 @@ def _build_live_revenue_steps(
             "narration": (
                 "Order #106 increases from $200.00 to $240.00 in SQLite, but the CDC "
                 "event omits old.amount_cents. SmplCache refuses to guess the delta, "
-                "emits invalidate (missing_evidence_for_repair), withholds the stale "
-                "cache, and rebuilds from the committed SQLite snapshot."
+                "emits REREAD (missing_evidence_for_repair), withholds the stale "
+                "cache, and rereads from the committed SQLite snapshot."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -1026,7 +1063,7 @@ def _build_live_revenue_steps(
             "narration": (
                 "Following the snapshot rebuild at Step 6, Order #107 in Europe "
                 "increases from $110.00 to $140.00 with complete before/after "
-                "evidence. SmplCache resumes in-place delta repair (+$30.00) on "
+                "evidence. SmplCache resumes FIX IN PLACE delta updates (+$30.00) on "
                 "the freshly rebuilt state."
             ),
             "table_written": "orders",
@@ -1098,12 +1135,12 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
         {
             "step_number": 1,
             "boundary_id": "join_step_1_preserve_note",
-            "title": "Change fact-table delivery note (Preserve across join)",
+            "title": "Change fact-table delivery note (KEEP across join)",
             "action_label": "Update Order #101 delivery note",
             "narration": (
                 "Order #101's notes column changes. Even in a 3-table join "
                 "(orders -> customers -> regions), notes is disjoint from the join "
-                "shape's table fingerprint, so SmplCache certifies preserve."
+                "shape's table fingerprint, so SmplCache chooses KEEP."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -1146,8 +1183,8 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Increase Order #101 amount (+$25.00)",
             "narration": (
                 "Order #101 increases by $25.00. Cached join lookup rows resolve Customer #1 "
-                "-> Region #1 (North America) in memory and repair North America's "
-                "joined total without querying SQLite."
+                "-> Region #1 (North America) in memory and update North America's "
+                "joined total in place (FIX IN PLACE) without querying SQLite."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -1192,7 +1229,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
                 "Dimension table update: Customer #1 moves from Region 1 (North America) "
                 "to Region 2 (Europe). SmplCache traverses its foreign-key lookup index to "
                 "locate all paid orders belonging to Customer #1 and transfers their "
-                "combined revenue from North America to Europe in place."
+                "combined revenue from North America to Europe in place (FIX IN PLACE)."
             ),
             "table_written": "customers",
             "operation": "UPDATE",
@@ -1232,7 +1269,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "narration": (
                 "Order #103 ($150.00) changes customer_id from 1 (Europe) to 3 "
                 "(Asia Pacific). SmplCache updates its foreign-key multiplicity "
-                "index and moves $150.00 from Europe to Asia Pacific."
+                "index and moves $150.00 from Europe to Asia Pacific in place (FIX IN PLACE)."
             ),
             "table_written": "orders",
             "operation": "UPDATE",
@@ -1276,7 +1313,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "narration": (
                 "A single BEGIN ... COMMIT transaction inserts Customer #9001 in "
                 "Latin America and paid Order #9001 ($95.00). The WAL stream processor "
-                "buffers the transaction until COMMIT and repairs Latin America."
+                "buffers the transaction until COMMIT and updates Latin America in place (FIX IN PLACE)."
             ),
             "table_written": "customers,orders",
             "operation": "BEGIN..COMMIT",
@@ -1342,7 +1379,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "narration": (
                 "An aborted transaction attempts to delete Order #101 and update "
                 "Customer #2, then issues ROLLBACK. The WAL stream processor discards "
-                "the buffered records and certifies KEEP (transaction_rollback)."
+                "the buffered records and chooses KEEP (transaction_rollback)."
             ),
             "table_written": "none (rolled back)",
             "operation": "ROLLBACK",
@@ -1376,7 +1413,7 @@ def _build_customers_and_regions_steps() -> list[dict[str, Any]]:
             "action_label": "Update Order #106 without old amount_cents",
             "narration": (
                 "Order #106 increases from $200.00 to $240.00 without old.amount_cents. "
-                "SmplCache rereads and rebuilds the cached join lookup rows and totals from "
+                "SmplCache chooses REREAD and rebuilds the cached join lookup rows and totals from "
                 "all 3 participating tables (orders, customers, regions = 3 source "
                 "queries vs. 1 joined baseline query), disclosing exact multi-table "
                 "rebuild overhead."
@@ -1429,8 +1466,8 @@ def _build_missing_evidence_steps() -> list[dict[str, Any]]:
             "action_label": "Apply complete WAL update on Order #101 (+$25.00)",
             "narration": (
                 "With PostgreSQL REPLICA IDENTITY FULL, the Debezium update carries "
-                "complete before and after images. SmplCache repairs North America "
-                "by +$25.00 with 0 database queries."
+                "complete before and after images. SmplCache updates North America "
+                "in place (FIX IN PLACE) by +$25.00 with 0 database queries."
             ),
             "table_written": "main.orders",
             "operation": "UPDATE",
@@ -1474,8 +1511,8 @@ def _build_missing_evidence_steps() -> list[dict[str, Any]]:
             "narration": (
                 "Order #106 increases from $200.00 to $240.00, but the WAL record "
                 "only includes primary key id=106 in `before`. SmplCache emits "
-                "invalidate (missing_evidence_for_repair), withholds the stale cache, "
-                "and triggers a snapshot rebuild at this committed boundary."
+                "REREAD (missing_evidence_for_repair), withholds the stale cache, "
+                "and triggers a snapshot reread at this committed boundary."
             ),
             "table_written": "main.orders",
             "operation": "UPDATE",
@@ -1512,7 +1549,7 @@ def _build_missing_evidence_steps() -> list[dict[str, Any]]:
             "narration": (
                 "Order #103's region column arrives as `__debezium_unavailable_value` "
                 "(an unchanged TOASTed value placeholder). Because `region` is a "
-                "required GROUP BY key, SmplCache refuses repair and rebuilds "
+                "required GROUP BY key, SmplCache chooses REREAD and rebuilds "
                 "from the SQLite snapshot."
             ),
             "table_written": "main.orders",
@@ -1557,7 +1594,7 @@ def _build_missing_evidence_steps() -> list[dict[str, Any]]:
             "narration": (
                 "An insert targets `tenant_archive.orders` ($500.00). Because "
                 "SmplCache preserves schema qualifiers during normalization, the "
-                "write is certified unrelated_relation (Preserve) and cannot corrupt "
+                "write is classified unrelated_relation (KEEP) and cannot corrupt "
                 "`main.orders`."
             ),
             "table_written": "tenant_archive.orders",
@@ -1606,8 +1643,8 @@ def _build_missing_evidence_steps() -> list[dict[str, Any]]:
             "action_label": "Rollback uncommitted update on Order #104",
             "narration": (
                 "A WAL transaction buffers an update to Order #104 and then emits "
-                "ROLLBACK. WalStreamProcessor discards the uncommitted buffer and "
-                "certifies preserve (transaction_rollback)."
+                "ROLLBACK. The WAL stream processor discards the uncommitted buffer and "
+                "chooses KEEP (transaction_rollback)."
             ),
             "table_written": "none (rolled back)",
             "operation": "ROLLBACK",
@@ -1653,8 +1690,8 @@ def _build_missing_evidence_steps() -> list[dict[str, Any]]:
             "narration": (
                 "Order #107 in Europe increases from $110.00 to $140.00 with full "
                 "before/after WAL images. Because the earlier invalidation was "
-                "rebuilt at its committed boundary, SmplCache repairs Europe by "
-                "+$30.00 in place."
+                "rebuilt at its committed boundary, SmplCache updates Europe by "
+                "+$30.00 in place (FIX IN PLACE)."
             ),
             "table_written": "main.orders",
             "operation": "UPDATE",
@@ -1861,12 +1898,16 @@ def execute_scenario_run(config: ScenarioConfig) -> dict[str, Any]:
 
         boundaries: list[dict[str, Any]] = []
         latched_invalid = False
+        prev_smpl_result: dict[str, int] | None = dict(smpl_initial)
 
         for idx, step in enumerate(raw_steps, start=1):
             b_base_recomp = 0
             b_base_queries = 0
             b_smpl_rebuilds = 0
             b_smpl_queries = 0
+            step_cache_before = (
+                dict(prev_smpl_result) if prev_smpl_result is not None else None
+            )
 
             # 1. Apply committed mutation to SQLite source database
             verifier.apply_sql_mutation(
@@ -2123,10 +2164,17 @@ def execute_scenario_run(config: ScenarioConfig) -> dict[str, Any]:
                     "narration": step["narration"],
                     "table_written": step["table_written"],
                     "operation": step["operation"],
+                    "change_sql": _format_step_change_sql(step),
                     "highlighted_order_id": step.get("highlighted_order_id"),
                     "delta_summary": step["delta_summary"],
                     "before_image": before_img,
                     "after_image": after_img,
+                    "cache_before": step_cache_before,
+                    "cache_after": (
+                        dict(smpl_post_result)
+                        if smpl_post_result is not None
+                        else dict(oracle_result)
+                    ),
                     "decision_kind": primary_decision.kind.value,
                     "ui_badge": ui_badge,
                     "reason_code": primary_decision.reason,
@@ -2183,6 +2231,9 @@ def execute_scenario_run(config: ScenarioConfig) -> dict[str, Any]:
                     "aux_telemetry": aux_telemetry,
                     "sample_orders": verifier.fetch_sample_orders(limit=7),
                 }
+            )
+            prev_smpl_result = (
+                dict(smpl_post_result) if smpl_post_result is not None else None
             )
 
             # Halt immediately if any oracle mismatch occurred!
@@ -2332,7 +2383,7 @@ def execute_scenario_run(config: ScenarioConfig) -> dict[str, Any]:
             "claim_hygiene": {
                 "what_it_supports": (
                     "Demonstrates in this synthetic SQLite setting that SmplCache "
-                    "preserves or incrementally repairs admitted SPJA query results "
+                    "preserves or incrementally repairs admitted SQL query results "
                     "when complete row evidence is present, and falls back to snapshot "
                     "recomputation when evidence is omitted or auxiliary rows are evicted."
                 ),

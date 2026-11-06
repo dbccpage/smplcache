@@ -295,6 +295,12 @@ class QueryShape:
         default_factory=frozenset, init=False, repr=False
     )
     _has_unparsed_predicate: bool = field(default=False, init=False, repr=False)
+    _join_cols: frozenset[str] = field(
+        default_factory=frozenset, init=False, repr=False
+    )
+    _explicit_projection_cols: frozenset[str] = field(
+        default_factory=frozenset, init=False, repr=False
+    )
 
     def __init__(
         self,
@@ -315,12 +321,14 @@ class QueryShape:
     ) -> None:
         norm_rel = normalize_relation(relation)
         norm_groups = tuple(str(c).lower() for c in group_cols)
-        norm_projs = frozenset(str(c).lower() for c in projection_cols)
+        explicit_projs = frozenset(str(c).lower() for c in projection_cols)
+        norm_projs = explicit_projs
         norm_secs = frozenset(str(c).lower() for c in security_cols)
 
         supported = is_supported
         reason = unsupported_reason
 
+        norm_joins: frozenset[str] = frozenset()
         if join_cols:
             norm_joins = frozenset(str(c).lower() for c in join_cols)
             if norm_joins:
@@ -374,6 +382,12 @@ class QueryShape:
         object.__setattr__(self, "unsupported_reason", reason)
         object.__setattr__(self, "_extra_predicate_cols", extra_pred_cols)
         object.__setattr__(self, "_has_unparsed_predicate", has_unparsed_pred)
+        object.__setattr__(self, "_join_cols", norm_joins)
+        object.__setattr__(self, "_explicit_projection_cols", explicit_projs)
+
+    @property
+    def join_cols(self) -> frozenset[str]:
+        return self._join_cols
 
     @property
     def predicate_cols(self) -> frozenset[str]:
@@ -385,8 +399,8 @@ class QueryShape:
 
     def dependency_set(self) -> dict[str, frozenset[str]]:
         return {
-            "read_cols": self.aggregate_cols | self.projection_cols,
-            "join_keys": frozenset(),
+            "read_cols": self.aggregate_cols | self._explicit_projection_cols,
+            "join_keys": self._join_cols,
             "filter_cols": self.predicate_cols,
             "group_cols": frozenset(self.group_cols),
             "security_cols": self.security_cols,

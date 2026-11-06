@@ -106,17 +106,63 @@ export function formatSignedCentsUsd(cents: number): string {
     .padStart(2, "0")}`;
 }
 
+function stripIdentifierQuotes(raw: string): string {
+  return raw.replace(/["`\[\]]/g, "").trim();
+}
+
 function normalizeTableName(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = stripIdentifierQuotes(raw).toLowerCase();
   const parts = trimmed.split(".");
   return parts[parts.length - 1] || trimmed;
 }
 
 function pushUnique(arr: string[], item: string): void {
-  const norm = item.trim().toLowerCase();
+  const norm = stripIdentifierQuotes(item).toLowerCase();
   if (norm && !arr.includes(norm)) {
     arr.push(norm);
   }
+}
+
+const SQL_KEYWORDS = new Set([
+  "select",
+  "from",
+  "join",
+  "inner",
+  "left",
+  "right",
+  "full",
+  "cross",
+  "on",
+  "where",
+  "group",
+  "by",
+  "order",
+  "having",
+  "limit",
+  "and",
+  "or",
+  "not",
+  "in",
+  "is",
+  "null",
+  "true",
+  "false",
+  "as",
+  "distinct",
+  "sum",
+  "count",
+  "avg",
+  "min",
+  "max",
+]);
+
+function isIdentifierToken(tok: string): boolean {
+  const clean = stripIdentifierQuotes(tok);
+  if (!clean || /^\d+(\.\d+)?$/.test(clean)) return false;
+  const parts = clean.split(".");
+  const last = parts[parts.length - 1]?.toLowerCase() ?? "";
+  if (!last || SQL_KEYWORDS.has(last)) return false;
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(last);
 }
 
 /**
@@ -147,39 +193,59 @@ export function extractQueryDependencies(sql: string): QueryDependencySet {
   }
 
   const fromMatch = clean.match(
-    /\bFROM\s+([a-zA-Z0-9_.]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_]+))?/i
+    /\bFROM\s+([a-zA-Z0-9_."`\[\]]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_"`\[\]]+))?/i
   );
   let baseTable = "orders";
   if (fromMatch) {
     baseTable = normalizeTableName(fromMatch[1]);
     ensureTable(baseTable);
     aliasToTable[baseTable] = baseTable;
-    const maybeAlias = fromMatch[2]?.toLowerCase();
-    if (
-      maybeAlias &&
-      !["join", "inner", "left", "where", "group", "order", "limit"].includes(
-        maybeAlias
-      )
-    ) {
+    const maybeAlias = stripIdentifierQuotes(fromMatch[2] ?? "").toLowerCase();
+    if (maybeAlias && !SQL_KEYWORDS.has(maybeAlias)) {
       aliasToTable[maybeAlias] = baseTable;
     }
   }
 
-  const joinRegex =
-    /\bJOIN\s+([a-zA-Z0-9_.]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_]+))?\s+ON\s+([a-zA-Z0-9_.]+)\s*=\s*([a-zA-Z0-9_.]+)/gi;
+  const joinClauseRegex =
+    /\bJOIN\s+([a-zA-Z0-9_."`\[\]]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_"`\[\]]+))?\s+ON\s+(.+?)(?=\b(?:INNER|LEFT|RIGHT|FULL|CROSS)?\s*JOIN\b|\bWHERE\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bHAVING\b|\bLIMIT\b|$)/gi;
   let jm: RegExpExecArray | null;
-  while ((jm = joinRegex.exec(clean)) !== null) {
+  while ((jm = joinClauseRegex.exec(clean)) !== null) {
     const joinTable = normalizeTableName(jm[1]);
     ensureTable(joinTable);
     aliasToTable[joinTable] = joinTable;
-    if (jm[2] && jm[2].toLowerCase() !== "on") {
-      aliasToTable[jm[2].toLowerCase()] = joinTable;
+    const maybeJoinAlias = stripIdentifierQuotes(jm[2] ?? "").toLowerCase();
+    if (maybeJoinAlias && !SQL_KEYWORDS.has(maybeJoinAlias)) {
+      aliasToTable[maybeJoinAlias] = joinTable;
     }
-    for (const ref of [jm[3], jm[4]]) {
-      const resolved = resolveColumnRef(ref, aliasToTable, baseTable);
-      if (resolved) {
-        const entry = ensureTable(resolved.table);
-        pushUnique(entry.joinKeys, resolved.column);
+    const onExpr = jm[3].replace(/'(?:''|[^'])*'/g, "''");
+    const eqRegex =
+      /([a-zA-Z0-9_."`\[\]]+)\s*(?:=|!=|<>|<=|>=|<|>)\s*([a-zA-Z0-9_."`\[\]]+)/g;
+    let eqMatch: RegExpExecArray | null;
+    while ((eqMatch = eqRegex.exec(onExpr)) !== null) {
+      for (const ref of [eqMatch[1], eqMatch[2]]) {
+        if (isIdentifierToken(ref)) {
+          const resolved = resolveColumnRef(ref, aliasToTable, baseTable);
+          if (resolved) {
+            const entry = ensureTable(resolved.table);
+            pushUnique(entry.joinKeys, resolved.column);
+          }
+        }
+      }
+    }
+  }
+
+  const groupMatch = clean.match(
+    /\bGROUP\s+BY\s+(.+?)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)/i
+  );
+  if (groupMatch) {
+    const groupParts = groupMatch[1].split(",");
+    for (const part of groupParts) {
+      const cleanedPart = part.replace(/[()]/g, "").trim();
+      if (isIdentifierToken(cleanedPart)) {
+        const resolved = resolveColumnRef(cleanedPart, aliasToTable, baseTable);
+        if (resolved) {
+          pushUnique(ensureTable(resolved.table).groupCols, resolved.column);
+        }
       }
     }
   }
@@ -187,43 +253,64 @@ export function extractQueryDependencies(sql: string): QueryDependencySet {
   const selectMatch = clean.match(/^SELECT\s+(.+?)\s+FROM\b/i);
   if (selectMatch) {
     const selectClause = selectMatch[1];
-    const aggRegex = /\b(?:SUM|COUNT|AVG|MIN|MAX)\s*\(\s*([a-zA-Z0-9_.*]+)\s*\)/gi;
+    const aggRegex =
+      /\b(?:SUM|COUNT|AVG|MIN|MAX)\s*\(\s*(?:DISTINCT\s+)?([a-zA-Z0-9_.*"`\[\]]+)\s*\)/gi;
     let am: RegExpExecArray | null;
     while ((am = aggRegex.exec(selectClause)) !== null) {
-      const inner = am[1].trim();
-      if (inner !== "*") {
+      const inner = stripIdentifierQuotes(am[1]);
+      if (inner !== "*" && isIdentifierToken(inner)) {
         const resolved = resolveColumnRef(inner, aliasToTable, baseTable);
         if (resolved) {
           pushUnique(ensureTable(resolved.table).readCols, resolved.column);
         }
       }
     }
-  }
 
-  const whereMatch = clean.match(/\bWHERE\s+(.+?)(?:\bGROUP\s+BY\b|$)/i);
-  if (whereMatch) {
-    const whereClause = whereMatch[1].replace(/'[^']*'/g, "''");
-    const predRegex =
-      /([a-zA-Z_][a-zA-Z0-9_.]*)\s*(?:=|!=|<>|<=|>=|<|>|\bIN\b|\bIS\b)/gi;
-    let pm: RegExpExecArray | null;
-    while ((pm = predRegex.exec(whereClause)) !== null) {
-      const token = pm[1];
-      if (!["and", "or", "not"].includes(token.toLowerCase())) {
-        const resolved = resolveColumnRef(token, aliasToTable, baseTable);
+    const strippedAggs = selectClause.replace(
+      /\b(?:SUM|COUNT|AVG|MIN|MAX)\s*\([^)]*\)/gi,
+      ""
+    );
+    for (const rawItem of strippedAggs.split(",")) {
+      const withoutAlias = rawItem
+        .trim()
+        .replace(/\s+AS\s+[a-zA-Z0-9_"`\[\]]+$/i, "")
+        .trim();
+      if (isIdentifierToken(withoutAlias)) {
+        const resolved = resolveColumnRef(withoutAlias, aliasToTable, baseTable);
         if (resolved) {
-          pushUnique(ensureTable(resolved.table).filterCols, resolved.column);
+          const tblDeps = ensureTable(resolved.table);
+          if (!tblDeps.groupCols.includes(resolved.column)) {
+            pushUnique(tblDeps.readCols, resolved.column);
+          }
         }
       }
     }
   }
 
-  const groupMatch = clean.match(/\bGROUP\s+BY\s+(.+)$/i);
-  if (groupMatch) {
-    const groupParts = groupMatch[1].split(",");
-    for (const part of groupParts) {
-      const resolved = resolveColumnRef(part.trim(), aliasToTable, baseTable);
-      if (resolved) {
-        pushUnique(ensureTable(resolved.table).groupCols, resolved.column);
+  const whereMatch = clean.match(
+    /\bWHERE\s+(.+?)(?=\bGROUP\s+BY\b|\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)/i
+  );
+  if (whereMatch) {
+    const whereClause = whereMatch[1].replace(/'(?:''|[^'])*'/g, "''");
+    const lhsRegex =
+      /([a-zA-Z0-9_."`\[\]]+)\s*(?:=|!=|<>|<=|>=|<|>|\bIN\b|\bIS\b)/gi;
+    let pm: RegExpExecArray | null;
+    while ((pm = lhsRegex.exec(whereClause)) !== null) {
+      if (isIdentifierToken(pm[1])) {
+        const resolved = resolveColumnRef(pm[1], aliasToTable, baseTable);
+        if (resolved) {
+          pushUnique(ensureTable(resolved.table).filterCols, resolved.column);
+        }
+      }
+    }
+    const rhsRegex = /(?:=|!=|<>|<=|>=|<|>)\s*([a-zA-Z0-9_."`\[\]]+)/gi;
+    let rm: RegExpExecArray | null;
+    while ((rm = rhsRegex.exec(whereClause)) !== null) {
+      if (isIdentifierToken(rm[1])) {
+        const resolved = resolveColumnRef(rm[1], aliasToTable, baseTable);
+        if (resolved) {
+          pushUnique(ensureTable(resolved.table).filterCols, resolved.column);
+        }
       }
     }
   }
@@ -248,7 +335,7 @@ function resolveColumnRef(
   aliasToTable: Record<string, string>,
   defaultTable: string
 ): { table: string; column: string } | null {
-  const trimmed = ref.trim();
+  const trimmed = stripIdentifierQuotes(ref);
   if (!trimmed) return null;
   const parts = trimmed.split(".");
   if (parts.length >= 2) {
@@ -290,36 +377,6 @@ export function classifyChangeMove(
   const after = input.afterImage ?? {};
   const pkCol = (input.primaryKeyCol ?? "id").toLowerCase();
 
-  const changed: string[] = [];
-  if (input.changedColumns && input.changedColumns.length > 0) {
-    for (const c of input.changedColumns) {
-      pushUnique(changed, c);
-    }
-  } else if (input.operation === "UPDATE") {
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const k of keys) {
-      if (before[k] !== after[k]) {
-        pushUnique(changed, k);
-      }
-    }
-  } else {
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const k of keys) {
-      pushUnique(changed, k);
-    }
-  }
-
-  if (input.operation === "UPDATE") {
-    const intersects = changed.some((c) => tableDeps.allCols.includes(c));
-    if (!intersects) {
-      return {
-        move: "KEEP",
-        decisionKind: "preserve",
-        reasonCode: "disjoint_columns",
-      };
-    }
-  }
-
   const requiredCols = [...tableDeps.allCols];
   if (deps.tables.length > 1) {
     pushUnique(requiredCols, pkCol);
@@ -332,6 +389,56 @@ export function classifyChangeMove(
         img[col] !== undefined &&
         img[col] !== "__debezium_unavailable_value"
     );
+
+  const changed: string[] = [];
+  if (input.changedColumns && input.changedColumns.length > 0) {
+    for (const c of input.changedColumns) {
+      pushUnique(changed, c);
+    }
+  } else if (input.operation === "UPDATE") {
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of keys) {
+      if (
+        !Object.prototype.hasOwnProperty.call(before, k) ||
+        !Object.prototype.hasOwnProperty.call(after, k) ||
+        before[k] !== after[k] ||
+        before[k] === "__debezium_unavailable_value" ||
+        after[k] === "__debezium_unavailable_value"
+      ) {
+        pushUnique(changed, k);
+      }
+    }
+  } else {
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of keys) {
+      pushUnique(changed, k);
+    }
+  }
+
+  if (input.operation === "UPDATE") {
+    if (!input.beforeImage || !input.afterImage) {
+      return {
+        move: "REREAD",
+        decisionKind: "invalidate",
+        reasonCode: "missing_evidence_for_repair",
+      };
+    }
+    if (changed.length === 0 && (!hasAllRequired(before) || !hasAllRequired(after))) {
+      return {
+        move: "REREAD",
+        decisionKind: "invalidate",
+        reasonCode: "missing_evidence_for_repair",
+      };
+    }
+    const intersects = changed.some((c) => tableDeps.allCols.includes(c));
+    if (!intersects) {
+      return {
+        move: "KEEP",
+        decisionKind: "preserve",
+        reasonCode: "disjoint_columns",
+      };
+    }
+  }
 
   if (input.operation === "UPDATE") {
     if (!hasAllRequired(before) || !hasAllRequired(after)) {
@@ -478,6 +585,30 @@ export function computeFixInPlaceArithmetic(params: {
       ? afterImage.status === "paid"
       : true;
 
+  if (changedGroups.length === 0 && allGroups.length > 0) {
+    const hintedGroup =
+      (afterImage && typeof afterImage.region === "string" && allGroups.includes(afterImage.region)
+        ? afterImage.region
+        : null) ??
+      (beforeImage && typeof beforeImage.region === "string" && allGroups.includes(beforeImage.region)
+        ? beforeImage.region
+        : null) ??
+      allGroups[0];
+    const beforeAns = beforeTotals[hintedGroup] ?? 0;
+    const afterAns = afterTotals[hintedGroup] ?? 0;
+    const val = oldAmt ?? newAmt ?? 0;
+    return [
+      {
+        group: hintedGroup,
+        oldValueCents: val,
+        newValueCents: newAmt ?? val,
+        diffCents: 0,
+        beforeAnswerCents: beforeAns,
+        afterAnswerCents: afterAns,
+      },
+    ];
+  }
+
   return changedGroups.map((group) => {
     const beforeAns = beforeTotals[group] ?? 0;
     const afterAns = afterTotals[group] ?? 0;
@@ -528,7 +659,7 @@ export function formatFixInPlaceArithmetic(params: {
 }): string {
   const entries = computeFixInPlaceArithmetic(params);
   if (entries.length === 0) {
-    return "No group total changed (diff $0.00).";
+    return "No group total changed (diff +$0.00).";
   }
   return entries
     .map(
@@ -583,6 +714,22 @@ export function formatPlainTextRecord(input: ReplayRecordInput): string {
   ].join("\n");
 }
 
+const SCENARIO_ALIASES: Record<string, ScenarioId> = {
+  front: "customers_and_regions",
+  join: "customers_and_regions",
+  live_revenue: "live_revenue",
+  customers_and_regions: "customers_and_regions",
+  missing_evidence: "missing_evidence",
+  missing_evidence_wal: "missing_evidence",
+};
+
+const SIZE_ALIASES: Record<string, number> = {
+  small: 100,
+  medium: 500,
+  large: 1000,
+  xlarge: 2500,
+};
+
 export function parseScreenUrlState(
   search: string,
   defaults: {
@@ -595,9 +742,13 @@ export function parseScreenUrlState(
 ): ScreenUrlState {
   const params = new URLSearchParams(search);
   let scenario = defaults.scenario;
-  const rawScen = params.get("scenario");
-  if (rawScen && (VALID_SCENARIOS as readonly string[]).includes(rawScen)) {
-    scenario = rawScen as ScenarioId;
+  const rawScen = params.get("scenario")?.trim().toLowerCase();
+  if (rawScen) {
+    if (rawScen in SCENARIO_ALIASES) {
+      scenario = SCENARIO_ALIASES[rawScen];
+    } else if ((VALID_SCENARIOS as readonly string[]).includes(rawScen)) {
+      scenario = rawScen as ScenarioId;
+    }
   }
 
   let seed = defaults.seed;
@@ -607,9 +758,14 @@ export function parseScreenUrlState(
   }
 
   let size = defaults.size;
-  const rawSize = Number(params.get("size"));
-  if (VALID_SIZES.includes(rawSize)) {
-    size = rawSize;
+  const rawSizeParam = params.get("size")?.trim().toLowerCase() ?? "";
+  if (rawSizeParam in SIZE_ALIASES) {
+    size = SIZE_ALIASES[rawSizeParam];
+  } else {
+    const rawSize = Number(rawSizeParam);
+    if (VALID_SIZES.includes(rawSize)) {
+      size = rawSize;
+    }
   }
 
   let step = defaults.step;
@@ -658,20 +814,41 @@ function sqlLiteral(v: unknown): string {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 
-export function buildBoundaryChangeSql(boundary: {
-  operation: string;
-  table_written: string;
-  before_image: Record<string, unknown> | null;
-  after_image: Record<string, unknown> | null;
-} | null): string {
+export function buildBoundaryChangeSql(
+  boundary: {
+    change_sql?: string;
+    operation: string;
+    table_written: string;
+    before_image: Record<string, unknown> | null;
+    after_image: Record<string, unknown> | null;
+  } | null
+): string {
   if (!boundary) return "(no change yet)";
+  if (boundary.change_sql && boundary.change_sql.trim()) {
+    return boundary.change_sql.trim();
+  }
   const op = boundary.operation.toUpperCase();
   const tbl = boundary.table_written;
   const before = boundary.before_image;
   const after = boundary.after_image;
 
   if (op.includes("ROLLBACK")) {
-    return "BEGIN; DELETE FROM orders WHERE id = 101; ROLLBACK";
+    if (before && after) {
+      const id = after.id ?? before.id ?? 104;
+      const diffCols = Object.keys(after).filter(
+        (k) => k !== "id" && before[k] !== after[k]
+      );
+      const targetTable =
+        tbl && tbl !== "none (rolled back)" ? tbl : "main.orders";
+      const assignments = (diffCols.length > 0 ? diffCols : ["amount_cents"])
+        .filter((k) => k in after)
+        .map((k) => `${k} = ${sqlLiteral(after[k])}`);
+      return `BEGIN; UPDATE ${targetTable} SET ${assignments.join(
+        ", "
+      )} WHERE id = ${sqlLiteral(id)}; ROLLBACK`;
+    }
+    const delId = before?.id ?? 101;
+    return `BEGIN; DELETE FROM orders WHERE id = ${sqlLiteral(delId)}; ROLLBACK`;
   }
   if (op.includes("BEGIN") && after) {
     const id = after.id ?? 9001;
@@ -693,11 +870,16 @@ export function buildBoundaryChangeSql(boundary: {
   }
   if (after) {
     const id = after.id ?? before?.id ?? "?";
-    const changedCols = Object.keys(after).filter((k) => {
-      if (k === "id") return false;
-      if (!before) return true;
-      return before[k] !== after[k];
-    });
+    const beforeHasNonPk =
+      before !== null &&
+      Object.keys(before).some((k) => k.toLowerCase() !== "id");
+    const changedCols = beforeHasNonPk
+      ? Object.keys(after).filter((k) => {
+          if (k === "id") return false;
+          if (!(k in (before ?? {}))) return true;
+          return before?.[k] !== after[k];
+        })
+      : ["amount_cents"].filter((k) => k in after);
     const setCols = changedCols.length > 0 ? changedCols : ["amount_cents"];
     const assignments = setCols
       .filter((k) => k in after)

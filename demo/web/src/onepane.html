@@ -107,6 +107,22 @@ th.id, td.id { width: 48px; font-family: var(--mono); color: var(--ink-2); }
   .cmp { min-width: 460px; }
   .cmp td.who { width: 130px; }
 }
+@media (max-width: 760px) {
+  .an-nav.an-nav--inline {
+    display: flex;
+    position: static;
+    flex-direction: row;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 12.5px;
+  }
+  .an-nav.an-nav--inline a { padding: 0; }
+}
+@media (max-width: 480px) {
+  .an-brand__tool { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { td.hit { transition: none; } }
 </style>
 </head>

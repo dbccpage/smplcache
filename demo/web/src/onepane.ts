@@ -19,12 +19,13 @@ const QUERY_SQL =
   "SELECT r.name, SUM(o.amount_cents) FROM orders o JOIN customers c ON o.customer_id = c.id JOIN regions r ON c.region_id = r.id WHERE o.status = 'paid' GROUP BY r.name";
 
 const REGIONS = ["North America", "Europe", "Asia Pacific", "Latin America"];
-const BASE: Record<string, number> = {
+const DEFAULT_BASE: Record<string, number> = {
   "North America": 2651700,
   Europe: 2160200,
   "Asia Pacific": 1641200,
   "Latin America": 1303700,
 };
+let baseTotals: Record<string, number> = { ...DEFAULT_BASE };
 const ACME_BASE = 57500;
 
 interface FrontStepDef {
@@ -157,7 +158,7 @@ let activeRecordInput: ReplayRecordInput = {
 };
 
 function truth(st: LocalState): Record<string, number> {
-  const t: Record<string, number> = { ...BASE };
+  const t: Record<string, number> = { ...baseTotals };
   const acme = ACME_BASE + (st.done[2] ? 2500 : 0) + (st.done[4] ? 4000 : 0);
   t[st.done[3] ? "Europe" : "North America"] += acme;
   return t;
@@ -303,6 +304,10 @@ function diff(
     }
   }
   return d;
+}
+
+function stripLeadingMovePrefix(reasonText: string): string {
+  return reasonText.replace(/^(?:KEEP|FIX IN PLACE|REREAD)\s*[—-]\s*/i, "");
 }
 
 function reset(updateUrl = true): void {
@@ -509,6 +514,40 @@ function apply(
   }
 }
 
+async function loadSeededFrontStep(state: ScreenUrlState): Promise<void> {
+  try {
+    const resp = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenario_id: "customers_and_regions",
+        seed: state.seed,
+        dataset_size: state.size,
+        aux_max_total_rows: null,
+      }),
+    });
+    if (resp.ok) {
+      const run = (await resp.json()) as RunTraceResponse;
+      const initTotals = run.initial_state.oracle_result_cents;
+      baseTotals = {
+        "North America": (initTotals["North America"] ?? 0) - ACME_BASE,
+        Europe: initTotals["Europe"] ?? 0,
+        "Asia Pacific": initTotals["Asia Pacific"] ?? 0,
+        "Latin America": initTotals["Latin America"] ?? 0,
+      };
+    }
+  } catch {
+    // Keep DEFAULT_BASE if offline
+  }
+  reset(false);
+  if (state.step >= 1 && state.step <= 4) {
+    apply(state.step, { immediate: true, syncUrl: true });
+  } else {
+    syncScreenUrlState(state);
+    updateLabLinks();
+  }
+}
+
 async function applyRemoteScenarioStep(state: ScreenUrlState): Promise<void> {
   try {
     const resp = await fetch("/api/runs", {
@@ -524,6 +563,22 @@ async function applyRemoteScenarioStep(state: ScreenUrlState): Promise<void> {
     });
     if (!resp.ok) return;
     const run = (await resp.json()) as RunTraceResponse;
+    const initTotals = run.initial_state.oracle_result_cents;
+    if (
+      "North America" in initTotals &&
+      "Europe" in initTotals &&
+      "Asia Pacific" in initTotals &&
+      "Latin America" in initTotals
+    ) {
+      baseTotals = {
+        "North America": (initTotals["North America"] ?? 0) - ACME_BASE,
+        Europe: initTotals["Europe"] ?? 0,
+        "Asia Pacific": initTotals["Asia Pacific"] ?? 0,
+        "Latin America": initTotals["Latin America"] ?? 0,
+      };
+      cached = truth(s);
+    }
+
     const queryEl = document.querySelector(".query");
     if (queryEl) {
       queryEl.innerHTML = `<b>Cached query</b>${run.sql}`;
@@ -617,11 +672,20 @@ async function applyRemoteScenarioStep(state: ScreenUrlState): Promise<void> {
 
     const wordClass =
       move === "KEEP" ? "kept" : move === "FIX IN PLACE" ? "fixed" : "rebuilt";
+    const cleanReason = stripLeadingMovePrefix(boundary.plain_language_reason);
     const detail =
       move === "FIX IN PLACE" && arith
         ? `(${boundary.reason_code}) — ${arith}.`
-        : `(${boundary.reason_code}) — ${boundary.plain_language_reason}`;
+        : `(${boundary.reason_code}) — ${cleanReason}`;
     setVerdict(wordClass, move, detail);
+    others(
+      boundary.boundary_counters.baseline_source_queries > 0
+        ? "Drops the cached key on table write; the next read reruns the full SQL query."
+        : "No committed write on a participating table.",
+      boundary.boundary_counters.baseline_recomputations > 0
+        ? "Serves old totals until REFRESH reruns the full SQL query."
+        : "No committed write on a participating table."
+    );
 
     const stepSql = buildBoundaryChangeSql(boundary);
 
@@ -671,6 +735,7 @@ document.getElementById("reset")?.addEventListener("click", () => {
   urlState.scenario = "customers_and_regions";
   urlState.seed = 42;
   urlState.size = 1000;
+  baseTotals = { ...DEFAULT_BASE };
   reset(true);
 });
 
@@ -682,19 +747,19 @@ document.getElementById("copy-record")?.addEventListener("click", () => {
 reset(false);
 updateLabLinks();
 
-const isDefaultFrontDataset =
+const isFrontStepScenario =
   urlState.scenario === "customers_and_regions" &&
-  urlState.seed === 42 &&
-  urlState.size === 1000 &&
   urlState.cap === null &&
   urlState.step <= 4;
 
-if (isDefaultFrontDataset) {
+if (isFrontStepScenario && urlState.seed === 42 && urlState.size === 1000) {
   if (urlState.step >= 1 && urlState.step <= 4) {
     apply(urlState.step, { immediate: true, syncUrl: true });
   } else if (window.location.search) {
     syncScreenUrlState(urlState);
   }
+} else if (isFrontStepScenario) {
+  void loadSeededFrontStep(urlState);
 } else {
   void applyRemoteScenarioStep(urlState);
 }

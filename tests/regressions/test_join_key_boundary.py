@@ -257,21 +257,51 @@ def test_non_pk_join_columns_customers_region_id_and_orders_customer_id_never_cl
     assert dec_cust_same_grp.kind == DecisionKind.REPAIR
     assert dec_cust_same_grp.reason == "dimension_update"
 
-    # 7. CLI workload shape extraction from SQL must derive join_cols (including
+    # 7. Changing customers.region_id for a customer with paid orders between two
+    # region_ids that do not match any row in regions (old_contribs == [] and new_contribs == []):
+    # fk_index must still reparent in place, so the move must be REPAIR, never PRESERVE (KEEP).
+    tables_unmatched_region = {
+        "orders": [
+            {"id": 101, "customer_id": 1, "status": "paid", "amount_cents": 10000},
+        ],
+        "customers": [
+            {"id": 1, "name": "Acme Industrial", "region_id": 99},
+        ],
+        "regions": [
+            {"id": 1, "name": "North America"},
+        ],
+    }
+    cache_unmatched = rebuild_join_cache(shape, tables_unmatched_region)
+    aux_unmatched = JoinAuxState.from_tables(shape, tables_unmatched_region)
+    evt_cust_unmatched_to_unmatched = WriteEvent(
+        relation="customers",
+        old={"id": 1, "name": "Acme Industrial", "region_id": 99},
+        new={"id": 1, "name": "Acme Industrial", "region_id": 100},
+    )
+    dec_cust_unmatched = process_join_event(
+        shape, cache_unmatched, evt_cust_unmatched_to_unmatched, aux_unmatched
+    )
+    assert dec_cust_unmatched.kind == DecisionKind.REPAIR
+    assert dec_cust_unmatched.reason == "dimension_update"
+
+    # 8. CLI workload shape extraction from SQL must derive join_cols (including
     # customers.region_id and orders.customer_id) from the SQL AST without a
-    # hand-written column list, never classifying changes to them as PRESERVE (KEEP).
+    # hand-written column list, populate dependency_set()['join_keys'], and never
+    # classify changes to them as PRESERVE (KEEP).
     from smplcache.cli import _shape_from_dict
     from smplcache.smplcache import certify_event
 
     cli_cust_shape = _shape_from_dict(
         {"name": "rev_by_region_cust", "relation": "customers", "sql": sql}
     )
+    assert cli_cust_shape.dependency_set()["join_keys"] == frozenset({"id", "region_id"})
     assert "region_id" in cli_cust_shape.fingerprint()
     assert certify_event(cli_cust_shape, evt_cust_region).kind != DecisionKind.PRESERVE
 
     cli_order_shape = _shape_from_dict(
         {"name": "rev_by_region_ord", "relation": "orders", "sql": sql}
     )
+    assert cli_order_shape.dependency_set()["join_keys"] == frozenset({"customer_id"})
     assert "customer_id" in cli_order_shape.fingerprint()
     assert (
         certify_event(cli_order_shape, evt_order_same_region).kind

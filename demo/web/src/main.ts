@@ -735,7 +735,7 @@ function renderApp(): void {
             <div class="policy-box smplcache-box ${isWithheld ? "withheld-mode" : ""}">
               <div class="policy-header">
                 <div>
-                  <div class="policy-name">SmplCache (Certified Incremental)</div>
+                  <div class="policy-name">SmplCache</div>
                   <div class="policy-sub">
                     ${
                       boundary
@@ -992,7 +992,7 @@ ${escapeHtml(run?.claim_hygiene.next_test_needed ?? "")}
 
       <footer class="footer-section">
         <div>
-          Anomalon · SmplCache Live · Apache-2.0 ·
+          Anomalon · SmplCache Live · Apache-2.0 · Numbers and query counts are for this demo only, not a benchmark ·
           <span class="commit-tag" title="Engine & App Git Revision">commit: ${escapeHtml(run?.engine_commit ?? "unavailable")}</span>
         </div>
         <div style="display:flex; gap:1rem; flex-wrap:wrap;">

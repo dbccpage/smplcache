@@ -107,6 +107,22 @@ th.id, td.id { width: 48px; font-family: var(--mono); color: var(--ink-2); }
   .cmp { min-width: 460px; }
   .cmp td.who { width: 130px; }
 }
+@media (max-width: 760px) {
+  .an-nav.an-nav--inline {
+    display: flex;
+    position: static;
+    flex-direction: row;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 12.5px;
+  }
+  .an-nav.an-nav--inline a { padding: 0; }
+}
+@media (max-width: 480px) {
+  .an-brand__tool { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { td.hit { transition: none; } }
 </style>
 </head>
@@ -236,16 +252,61 @@ function formatSignedCentsUsd(cents) {
         .toString()
         .padStart(2, "0")}`;
 }
+function stripIdentifierQuotes(raw) {
+    return raw.replace(/["`\[\]]/g, "").trim();
+}
 function normalizeTableName(raw) {
-    const trimmed = raw.trim().toLowerCase();
+    const trimmed = stripIdentifierQuotes(raw).toLowerCase();
     const parts = trimmed.split(".");
     return parts[parts.length - 1] || trimmed;
 }
 function pushUnique(arr, item) {
-    const norm = item.trim().toLowerCase();
+    const norm = stripIdentifierQuotes(item).toLowerCase();
     if (norm && !arr.includes(norm)) {
         arr.push(norm);
     }
+}
+const SQL_KEYWORDS = new Set([
+    "select",
+    "from",
+    "join",
+    "inner",
+    "left",
+    "right",
+    "full",
+    "cross",
+    "on",
+    "where",
+    "group",
+    "by",
+    "order",
+    "having",
+    "limit",
+    "and",
+    "or",
+    "not",
+    "in",
+    "is",
+    "null",
+    "true",
+    "false",
+    "as",
+    "distinct",
+    "sum",
+    "count",
+    "avg",
+    "min",
+    "max",
+]);
+function isIdentifierToken(tok) {
+    const clean = stripIdentifierQuotes(tok);
+    if (!clean || /^\d+(\.\d+)?$/.test(clean))
+        return false;
+    const parts = clean.split(".");
+    const last = parts[parts.length - 1]?.toLowerCase() ?? "";
+    if (!last || SQL_KEYWORDS.has(last))
+        return false;
+    return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(last);
 }
 /**
  * Derive each participating table's dependency set (read columns, join keys,
@@ -272,72 +333,107 @@ function extractQueryDependencies(sql) {
         }
         return columnsByTable[norm];
     }
-    const fromMatch = clean.match(/\bFROM\s+([a-zA-Z0-9_.]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_]+))?/i);
+    const fromMatch = clean.match(/\bFROM\s+([a-zA-Z0-9_."`\[\]]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_"`\[\]]+))?/i);
     let baseTable = "orders";
     if (fromMatch) {
         baseTable = normalizeTableName(fromMatch[1]);
         ensureTable(baseTable);
         aliasToTable[baseTable] = baseTable;
-        const maybeAlias = fromMatch[2]?.toLowerCase();
-        if (maybeAlias &&
-            !["join", "inner", "left", "where", "group", "order", "limit"].includes(maybeAlias)) {
+        const maybeAlias = stripIdentifierQuotes(fromMatch[2] ?? "").toLowerCase();
+        if (maybeAlias && !SQL_KEYWORDS.has(maybeAlias)) {
             aliasToTable[maybeAlias] = baseTable;
         }
     }
-    const joinRegex = /\bJOIN\s+([a-zA-Z0-9_.]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_]+))?\s+ON\s+([a-zA-Z0-9_.]+)\s*=\s*([a-zA-Z0-9_.]+)/gi;
+    const joinClauseRegex = /\bJOIN\s+([a-zA-Z0-9_."`\[\]]+)(?:\s+(?:AS\s+)?([a-zA-Z0-9_"`\[\]]+))?\s+ON\s+(.+?)(?=\b(?:INNER|LEFT|RIGHT|FULL|CROSS)?\s*JOIN\b|\bWHERE\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bHAVING\b|\bLIMIT\b|$)/gi;
     let jm;
-    while ((jm = joinRegex.exec(clean)) !== null) {
+    while ((jm = joinClauseRegex.exec(clean)) !== null) {
         const joinTable = normalizeTableName(jm[1]);
         ensureTable(joinTable);
         aliasToTable[joinTable] = joinTable;
-        if (jm[2] && jm[2].toLowerCase() !== "on") {
-            aliasToTable[jm[2].toLowerCase()] = joinTable;
+        const maybeJoinAlias = stripIdentifierQuotes(jm[2] ?? "").toLowerCase();
+        if (maybeJoinAlias && !SQL_KEYWORDS.has(maybeJoinAlias)) {
+            aliasToTable[maybeJoinAlias] = joinTable;
         }
-        for (const ref of [jm[3], jm[4]]) {
-            const resolved = resolveColumnRef(ref, aliasToTable, baseTable);
-            if (resolved) {
-                const entry = ensureTable(resolved.table);
-                pushUnique(entry.joinKeys, resolved.column);
+        const onExpr = jm[3].replace(/'(?:''|[^'])*'/g, "''");
+        const eqRegex = /([a-zA-Z0-9_."`\[\]]+)\s*(?:=|!=|<>|<=|>=|<|>)\s*([a-zA-Z0-9_."`\[\]]+)/g;
+        let eqMatch;
+        while ((eqMatch = eqRegex.exec(onExpr)) !== null) {
+            for (const ref of [eqMatch[1], eqMatch[2]]) {
+                if (isIdentifierToken(ref)) {
+                    const resolved = resolveColumnRef(ref, aliasToTable, baseTable);
+                    if (resolved) {
+                        const entry = ensureTable(resolved.table);
+                        pushUnique(entry.joinKeys, resolved.column);
+                    }
+                }
+            }
+        }
+    }
+    const groupMatch = clean.match(/\bGROUP\s+BY\s+(.+?)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)/i);
+    if (groupMatch) {
+        const groupParts = groupMatch[1].split(",");
+        for (const part of groupParts) {
+            const cleanedPart = part.replace(/[()]/g, "").trim();
+            if (isIdentifierToken(cleanedPart)) {
+                const resolved = resolveColumnRef(cleanedPart, aliasToTable, baseTable);
+                if (resolved) {
+                    pushUnique(ensureTable(resolved.table).groupCols, resolved.column);
+                }
             }
         }
     }
     const selectMatch = clean.match(/^SELECT\s+(.+?)\s+FROM\b/i);
     if (selectMatch) {
         const selectClause = selectMatch[1];
-        const aggRegex = /\b(?:SUM|COUNT|AVG|MIN|MAX)\s*\(\s*([a-zA-Z0-9_.*]+)\s*\)/gi;
+        const aggRegex = /\b(?:SUM|COUNT|AVG|MIN|MAX)\s*\(\s*(?:DISTINCT\s+)?([a-zA-Z0-9_.*"`\[\]]+)\s*\)/gi;
         let am;
         while ((am = aggRegex.exec(selectClause)) !== null) {
-            const inner = am[1].trim();
-            if (inner !== "*") {
+            const inner = stripIdentifierQuotes(am[1]);
+            if (inner !== "*" && isIdentifierToken(inner)) {
                 const resolved = resolveColumnRef(inner, aliasToTable, baseTable);
                 if (resolved) {
                     pushUnique(ensureTable(resolved.table).readCols, resolved.column);
                 }
             }
         }
+        const strippedAggs = selectClause.replace(/\b(?:SUM|COUNT|AVG|MIN|MAX)\s*\([^)]*\)/gi, "");
+        for (const rawItem of strippedAggs.split(",")) {
+            const withoutAlias = rawItem
+                .trim()
+                .replace(/\s+AS\s+[a-zA-Z0-9_"`\[\]]+$/i, "")
+                .trim();
+            if (isIdentifierToken(withoutAlias)) {
+                const resolved = resolveColumnRef(withoutAlias, aliasToTable, baseTable);
+                if (resolved) {
+                    const tblDeps = ensureTable(resolved.table);
+                    if (!tblDeps.groupCols.includes(resolved.column)) {
+                        pushUnique(tblDeps.readCols, resolved.column);
+                    }
+                }
+            }
+        }
     }
-    const whereMatch = clean.match(/\bWHERE\s+(.+?)(?:\bGROUP\s+BY\b|$)/i);
+    const whereMatch = clean.match(/\bWHERE\s+(.+?)(?=\bGROUP\s+BY\b|\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|$)/i);
     if (whereMatch) {
-        const whereClause = whereMatch[1].replace(/'[^']*'/g, "''");
-        const predRegex = /([a-zA-Z_][a-zA-Z0-9_.]*)\s*(?:=|!=|<>|<=|>=|<|>|\bIN\b|\bIS\b)/gi;
+        const whereClause = whereMatch[1].replace(/'(?:''|[^'])*'/g, "''");
+        const lhsRegex = /([a-zA-Z0-9_."`\[\]]+)\s*(?:=|!=|<>|<=|>=|<|>|\bIN\b|\bIS\b)/gi;
         let pm;
-        while ((pm = predRegex.exec(whereClause)) !== null) {
-            const token = pm[1];
-            if (!["and", "or", "not"].includes(token.toLowerCase())) {
-                const resolved = resolveColumnRef(token, aliasToTable, baseTable);
+        while ((pm = lhsRegex.exec(whereClause)) !== null) {
+            if (isIdentifierToken(pm[1])) {
+                const resolved = resolveColumnRef(pm[1], aliasToTable, baseTable);
                 if (resolved) {
                     pushUnique(ensureTable(resolved.table).filterCols, resolved.column);
                 }
             }
         }
-    }
-    const groupMatch = clean.match(/\bGROUP\s+BY\s+(.+)$/i);
-    if (groupMatch) {
-        const groupParts = groupMatch[1].split(",");
-        for (const part of groupParts) {
-            const resolved = resolveColumnRef(part.trim(), aliasToTable, baseTable);
-            if (resolved) {
-                pushUnique(ensureTable(resolved.table).groupCols, resolved.column);
+        const rhsRegex = /(?:=|!=|<>|<=|>=|<|>)\s*([a-zA-Z0-9_."`\[\]]+)/gi;
+        let rm;
+        while ((rm = rhsRegex.exec(whereClause)) !== null) {
+            if (isIdentifierToken(rm[1])) {
+                const resolved = resolveColumnRef(rm[1], aliasToTable, baseTable);
+                if (resolved) {
+                    pushUnique(ensureTable(resolved.table).filterCols, resolved.column);
+                }
             }
         }
     }
@@ -355,7 +451,7 @@ function extractQueryDependencies(sql) {
     return { tables, baseTable, aliasToTable, columnsByTable };
 }
 function resolveColumnRef(ref, aliasToTable, defaultTable) {
-    const trimmed = ref.trim();
+    const trimmed = stripIdentifierQuotes(ref);
     if (!trimmed)
         return null;
     const parts = trimmed.split(".");
@@ -392,6 +488,13 @@ function classifyChangeMove(input) {
     const before = input.beforeImage ?? {};
     const after = input.afterImage ?? {};
     const pkCol = (input.primaryKeyCol ?? "id").toLowerCase();
+    const requiredCols = [...tableDeps.allCols];
+    if (deps.tables.length > 1) {
+        pushUnique(requiredCols, pkCol);
+    }
+    const hasAllRequired = (img) => requiredCols.every((col) => Object.prototype.hasOwnProperty.call(img, col) &&
+        img[col] !== undefined &&
+        img[col] !== "__debezium_unavailable_value");
     const changed = [];
     if (input.changedColumns && input.changedColumns.length > 0) {
         for (const c of input.changedColumns) {
@@ -401,7 +504,11 @@ function classifyChangeMove(input) {
     else if (input.operation === "UPDATE") {
         const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
         for (const k of keys) {
-            if (before[k] !== after[k]) {
+            if (!Object.prototype.hasOwnProperty.call(before, k) ||
+                !Object.prototype.hasOwnProperty.call(after, k) ||
+                before[k] !== after[k] ||
+                before[k] === "__debezium_unavailable_value" ||
+                after[k] === "__debezium_unavailable_value") {
                 pushUnique(changed, k);
             }
         }
@@ -413,6 +520,20 @@ function classifyChangeMove(input) {
         }
     }
     if (input.operation === "UPDATE") {
+        if (!input.beforeImage || !input.afterImage) {
+            return {
+                move: "REREAD",
+                decisionKind: "invalidate",
+                reasonCode: "missing_evidence_for_repair",
+            };
+        }
+        if (changed.length === 0 && (!hasAllRequired(before) || !hasAllRequired(after))) {
+            return {
+                move: "REREAD",
+                decisionKind: "invalidate",
+                reasonCode: "missing_evidence_for_repair",
+            };
+        }
         const intersects = changed.some((c) => tableDeps.allCols.includes(c));
         if (!intersects) {
             return {
@@ -422,13 +543,6 @@ function classifyChangeMove(input) {
             };
         }
     }
-    const requiredCols = [...tableDeps.allCols];
-    if (deps.tables.length > 1) {
-        pushUnique(requiredCols, pkCol);
-    }
-    const hasAllRequired = (img) => requiredCols.every((col) => Object.prototype.hasOwnProperty.call(img, col) &&
-        img[col] !== undefined &&
-        img[col] !== "__debezium_unavailable_value");
     if (input.operation === "UPDATE") {
         if (!hasAllRequired(before) || !hasAllRequired(after)) {
             return {
@@ -548,6 +662,28 @@ function computeFixInPlaceArithmetic(params) {
     const newPaid = afterImage && afterImage.status !== undefined
         ? afterImage.status === "paid"
         : true;
+    if (changedGroups.length === 0 && allGroups.length > 0) {
+        const hintedGroup = (afterImage && typeof afterImage.region === "string" && allGroups.includes(afterImage.region)
+            ? afterImage.region
+            : null) ??
+            (beforeImage && typeof beforeImage.region === "string" && allGroups.includes(beforeImage.region)
+                ? beforeImage.region
+                : null) ??
+            allGroups[0];
+        const beforeAns = beforeTotals[hintedGroup] ?? 0;
+        const afterAns = afterTotals[hintedGroup] ?? 0;
+        const val = oldAmt ?? newAmt ?? 0;
+        return [
+            {
+                group: hintedGroup,
+                oldValueCents: val,
+                newValueCents: newAmt ?? val,
+                diffCents: 0,
+                beforeAnswerCents: beforeAns,
+                afterAnswerCents: afterAns,
+            },
+        ];
+    }
     return changedGroups.map((group) => {
         const beforeAns = beforeTotals[group] ?? 0;
         const afterAns = afterTotals[group] ?? 0;
@@ -588,7 +724,7 @@ function computeFixInPlaceArithmetic(params) {
 function formatFixInPlaceArithmetic(params) {
     const entries = computeFixInPlaceArithmetic(params);
     if (entries.length === 0) {
-        return "No group total changed (diff $0.00).";
+        return "No group total changed (diff +$0.00).";
     }
     return entries
         .map((e) => `${e.group}: old ${formatCentsUsd(e.oldValueCents)} → new ${formatCentsUsd(e.newValueCents)} (diff ${formatSignedCentsUsd(e.diffCents)}), answer ${formatCentsUsd(e.beforeAnswerCents)} → ${formatCentsUsd(e.afterAnswerCents)}`)
@@ -629,12 +765,31 @@ function formatPlainTextRecord(input) {
         `after_answer: ${formatAnswersSummary(input.afterTotals, input.groupOrder)}`,
     ].join("\n");
 }
+const SCENARIO_ALIASES = {
+    front: "customers_and_regions",
+    join: "customers_and_regions",
+    live_revenue: "live_revenue",
+    customers_and_regions: "customers_and_regions",
+    missing_evidence: "missing_evidence",
+    missing_evidence_wal: "missing_evidence",
+};
+const SIZE_ALIASES = {
+    small: 100,
+    medium: 500,
+    large: 1000,
+    xlarge: 2500,
+};
 function parseScreenUrlState(search, defaults) {
     const params = new URLSearchParams(search);
     let scenario = defaults.scenario;
-    const rawScen = params.get("scenario");
-    if (rawScen && VALID_SCENARIOS.includes(rawScen)) {
-        scenario = rawScen;
+    const rawScen = params.get("scenario")?.trim().toLowerCase();
+    if (rawScen) {
+        if (rawScen in SCENARIO_ALIASES) {
+            scenario = SCENARIO_ALIASES[rawScen];
+        }
+        else if (VALID_SCENARIOS.includes(rawScen)) {
+            scenario = rawScen;
+        }
     }
     let seed = defaults.seed;
     const rawSeed = Number(params.get("seed"));
@@ -642,9 +797,15 @@ function parseScreenUrlState(search, defaults) {
         seed = rawSeed;
     }
     let size = defaults.size;
-    const rawSize = Number(params.get("size"));
-    if (VALID_SIZES.includes(rawSize)) {
-        size = rawSize;
+    const rawSizeParam = params.get("size")?.trim().toLowerCase() ?? "";
+    if (rawSizeParam in SIZE_ALIASES) {
+        size = SIZE_ALIASES[rawSizeParam];
+    }
+    else {
+        const rawSize = Number(rawSizeParam);
+        if (VALID_SIZES.includes(rawSize)) {
+            size = rawSize;
+        }
     }
     let step = defaults.step;
     const rawStep = params.get("step");
@@ -691,12 +852,25 @@ function sqlLiteral(v) {
 function buildBoundaryChangeSql(boundary) {
     if (!boundary)
         return "(no change yet)";
+    if (boundary.change_sql && boundary.change_sql.trim()) {
+        return boundary.change_sql.trim();
+    }
     const op = boundary.operation.toUpperCase();
     const tbl = boundary.table_written;
     const before = boundary.before_image;
     const after = boundary.after_image;
     if (op.includes("ROLLBACK")) {
-        return "BEGIN; DELETE FROM orders WHERE id = 101; ROLLBACK";
+        if (before && after) {
+            const id = after.id ?? before.id ?? 104;
+            const diffCols = Object.keys(after).filter((k) => k !== "id" && before[k] !== after[k]);
+            const targetTable = tbl && tbl !== "none (rolled back)" ? tbl : "main.orders";
+            const assignments = (diffCols.length > 0 ? diffCols : ["amount_cents"])
+                .filter((k) => k in after)
+                .map((k) => `${k} = ${sqlLiteral(after[k])}`);
+            return `BEGIN; UPDATE ${targetTable} SET ${assignments.join(", ")} WHERE id = ${sqlLiteral(id)}; ROLLBACK`;
+        }
+        const delId = before?.id ?? 101;
+        return `BEGIN; DELETE FROM orders WHERE id = ${sqlLiteral(delId)}; ROLLBACK`;
     }
     if (op.includes("BEGIN") && after) {
         const id = after.id ?? 9001;
@@ -714,13 +888,17 @@ function buildBoundaryChangeSql(boundary) {
     }
     if (after) {
         const id = after.id ?? before?.id ?? "?";
-        const changedCols = Object.keys(after).filter((k) => {
-            if (k === "id")
-                return false;
-            if (!before)
-                return true;
-            return before[k] !== after[k];
-        });
+        const beforeHasNonPk = before !== null &&
+            Object.keys(before).some((k) => k.toLowerCase() !== "id");
+        const changedCols = beforeHasNonPk
+            ? Object.keys(after).filter((k) => {
+                if (k === "id")
+                    return false;
+                if (!(k in (before ?? {})))
+                    return true;
+                return before?.[k] !== after[k];
+            })
+            : ["amount_cents"].filter((k) => k in after);
         const setCols = changedCols.length > 0 ? changedCols : ["amount_cents"];
         const assignments = setCols
             .filter((k) => k in after)
@@ -735,12 +913,13 @@ function buildBoundaryChangeSql(boundary) {
 
 const QUERY_SQL = "SELECT r.name, SUM(o.amount_cents) FROM orders o JOIN customers c ON o.customer_id = c.id JOIN regions r ON c.region_id = r.id WHERE o.status = 'paid' GROUP BY r.name";
 const REGIONS = ["North America", "Europe", "Asia Pacific", "Latin America"];
-const BASE = {
+const DEFAULT_BASE = {
     "North America": 2651700,
     Europe: 2160200,
     "Asia Pacific": 1641200,
     "Latin America": 1303700,
 };
+let baseTotals = { ...DEFAULT_BASE };
 const ACME_BASE = 57500;
 const FRONT_STEPS = {
     1: {
@@ -850,7 +1029,7 @@ let activeRecordInput = {
     groupOrder: REGIONS,
 };
 function truth(st) {
-    const t = { ...BASE };
+    const t = { ...baseTotals };
     const acme = ACME_BASE + (st.done[2] ? 2500 : 0) + (st.done[4] ? 4000 : 0);
     t[st.done[3] ? "Europe" : "North America"] += acme;
     return t;
@@ -951,6 +1130,9 @@ function diff(before, after) {
         }
     }
     return d;
+}
+function stripLeadingMovePrefix(reasonText) {
+    return reasonText.replace(/^(?:KEEP|FIX IN PLACE|REREAD)\s*[—-]\s*/i, "");
 }
 function reset(updateUrl = true) {
     window.clearTimeout(timer);
@@ -1102,6 +1284,41 @@ function apply(step, options = {}) {
         updateLabLinks();
     }
 }
+async function loadSeededFrontStep(state) {
+    try {
+        const resp = await fetch("/api/runs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                scenario_id: "customers_and_regions",
+                seed: state.seed,
+                dataset_size: state.size,
+                aux_max_total_rows: null,
+            }),
+        });
+        if (resp.ok) {
+            const run = (await resp.json());
+            const initTotals = run.initial_state.oracle_result_cents;
+            baseTotals = {
+                "North America": (initTotals["North America"] ?? 0) - ACME_BASE,
+                Europe: initTotals["Europe"] ?? 0,
+                "Asia Pacific": initTotals["Asia Pacific"] ?? 0,
+                "Latin America": initTotals["Latin America"] ?? 0,
+            };
+        }
+    }
+    catch {
+        // Keep DEFAULT_BASE if offline
+    }
+    reset(false);
+    if (state.step >= 1 && state.step <= 4) {
+        apply(state.step, { immediate: true, syncUrl: true });
+    }
+    else {
+        syncScreenUrlState(state);
+        updateLabLinks();
+    }
+}
 async function applyRemoteScenarioStep(state) {
     try {
         const resp = await fetch("/api/runs", {
@@ -1117,6 +1334,19 @@ async function applyRemoteScenarioStep(state) {
         if (!resp.ok)
             return;
         const run = (await resp.json());
+        const initTotals = run.initial_state.oracle_result_cents;
+        if ("North America" in initTotals &&
+            "Europe" in initTotals &&
+            "Asia Pacific" in initTotals &&
+            "Latin America" in initTotals) {
+            baseTotals = {
+                "North America": (initTotals["North America"] ?? 0) - ACME_BASE,
+                Europe: initTotals["Europe"] ?? 0,
+                "Asia Pacific": initTotals["Asia Pacific"] ?? 0,
+                "Latin America": initTotals["Latin America"] ?? 0,
+            };
+            cached = truth(s);
+        }
         const queryEl = document.querySelector(".query");
         if (queryEl) {
             queryEl.innerHTML = `<b>Cached query</b>${run.sql}`;
@@ -1183,10 +1413,16 @@ async function applyRemoteScenarioStep(state) {
             })
             : undefined;
         const wordClass = move === "KEEP" ? "kept" : move === "FIX IN PLACE" ? "fixed" : "rebuilt";
+        const cleanReason = stripLeadingMovePrefix(boundary.plain_language_reason);
         const detail = move === "FIX IN PLACE" && arith
             ? `(${boundary.reason_code}) — ${arith}.`
-            : `(${boundary.reason_code}) — ${boundary.plain_language_reason}`;
+            : `(${boundary.reason_code}) — ${cleanReason}`;
         setVerdict(wordClass, move, detail);
+        others(boundary.boundary_counters.baseline_source_queries > 0
+            ? "Drops the cached key on table write; the next read reruns the full SQL query."
+            : "No committed write on a participating table.", boundary.boundary_counters.baseline_recomputations > 0
+            ? "Serves old totals until REFRESH reruns the full SQL query."
+            : "No committed write on a participating table.");
         const stepSql = buildBoundaryChangeSql(boundary);
         activeRecordInput = {
             scenario: state.scenario,
@@ -1232,6 +1468,7 @@ document.getElementById("reset")?.addEventListener("click", () => {
     urlState.scenario = "customers_and_regions";
     urlState.seed = 42;
     urlState.size = 1000;
+    baseTotals = { ...DEFAULT_BASE };
     reset(true);
 });
 document.getElementById("copy-record")?.addEventListener("click", () => {
@@ -1240,18 +1477,19 @@ document.getElementById("copy-record")?.addEventListener("click", () => {
 // Initialize screen from URL parameters (?scenario=&seed=&size=&step=)
 reset(false);
 updateLabLinks();
-const isDefaultFrontDataset = urlState.scenario === "customers_and_regions" &&
-    urlState.seed === 42 &&
-    urlState.size === 1000 &&
+const isFrontStepScenario = urlState.scenario === "customers_and_regions" &&
     urlState.cap === null &&
     urlState.step <= 4;
-if (isDefaultFrontDataset) {
+if (isFrontStepScenario && urlState.seed === 42 && urlState.size === 1000) {
     if (urlState.step >= 1 && urlState.step <= 4) {
         apply(urlState.step, { immediate: true, syncUrl: true });
     }
     else if (window.location.search) {
         syncScreenUrlState(urlState);
     }
+}
+else if (isFrontStepScenario) {
+    void loadSeededFrontStep(urlState);
 }
 else {
     void applyRemoteScenarioStep(urlState);

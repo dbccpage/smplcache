@@ -503,6 +503,10 @@ def test_front_page_prerendered_rows_and_no_change_yet_before_js() -> None:
 
 
 def test_shared_moves_module_and_copy_record_and_url_roundtrip_contracts() -> None:
+    import json
+    import shutil
+    import subprocess
+
     web_src = Path(__file__).resolve().parent.parent / "web" / "src"
     moves_ts = web_src / "moves.ts"
     onepane_ts = web_src / "onepane.ts"
@@ -526,6 +530,143 @@ def test_shared_moves_module_and_copy_record_and_url_roundtrip_contracts() -> No
     assert "formatPlainTextRecord" in moves_text
     assert "parseScreenUrlState" in moves_text
 
-    # /lab/ uses plain labels KEEP, FIX IN PLACE, REREAD and has Copy record
+    # /lab/ uses plain labels KEEP, FIX IN PLACE, REREAD, has Copy record, and avoids unverified 'Certified' badge
     assert "FIX IN PLACE" in main_text or "decisionKindToMove" in main_text
     assert "Copy record" in main_text
+    assert "SmplCache (Certified Incremental)" not in main_text
+    assert "demo only, not a benchmark" in main_text
+
+    # Verify /api/runs boundaries include exact change_sql, cache_before, and cache_after
+    r_wal = client.post(
+        "/api/runs",
+        json={"scenario_id": "missing_evidence", "seed": 42, "dataset_size": 100},
+    ).json()
+    b_wal_step2 = r_wal["boundaries"][1]
+    assert (
+        b_wal_step2["change_sql"]
+        == "UPDATE main.orders SET amount_cents = 24000 WHERE id = 106"
+    )
+    assert isinstance(b_wal_step2["cache_before"], dict)
+    assert isinstance(b_wal_step2["cache_after"], dict)
+
+    b_wal_step5 = r_wal["boundaries"][4]
+    assert (
+        b_wal_step5["change_sql"]
+        == "BEGIN; UPDATE main.orders SET amount_cents = 99900 WHERE id = 104; ROLLBACK"
+    )
+
+    node_bin = shutil.which("node")
+    if node_bin:
+        node_script = """
+import * as moves from "./demo/web/src/moves.ts";
+
+const sql = "SELECT r.name, SUM(o.amount_cents) FROM orders o JOIN customers c ON (o.customer_id = c.id) JOIN regions r ON c.region_id = r.id WHERE 'paid' = o.status GROUP BY r.name";
+const deps = moves.extractQueryDependencies(sql);
+
+const moveCust = moves.classifyChangeMove({
+  sql,
+  table: "customers",
+  operation: "UPDATE",
+  beforeImage: { id: 1, name: "Acme", region_id: 1 },
+  afterImage: { id: 1, name: "Acme", region_id: 2 },
+  hasMatchedJoinRows: true,
+});
+
+const moveOrderFk = moves.classifyChangeMove({
+  sql,
+  table: "orders",
+  operation: "UPDATE",
+  beforeImage: { id: 101, customer_id: 1, status: "paid", amount_cents: 10000 },
+  afterImage: { id: 101, customer_id: 5, status: "paid", amount_cents: 10000 },
+});
+
+const moveEmptyBefore = moves.classifyChangeMove({
+  sql,
+  table: "orders",
+  operation: "UPDATE",
+  beforeImage: { id: 106 },
+  afterImage: { id: 106 },
+});
+
+const moveNullBefore = moves.classifyChangeMove({
+  sql,
+  table: "orders",
+  operation: "UPDATE",
+  beforeImage: null,
+  afterImage: { id: 106, amount_cents: 24000 },
+});
+
+const zeroDeltaArith = moves.formatFixInPlaceArithmetic({
+  beforeTotals: { "North America": 10000 },
+  afterTotals: { "North America": 10000 },
+  beforeImage: { id: 101, amount_cents: 10000 },
+  afterImage: { id: 101, amount_cents: 10000 },
+  groupOrder: ["North America"],
+});
+
+const parsedUrl = moves.parseScreenUrlState("?scenario=front&seed=1&size=small&step=3", {
+  scenario: "live_revenue",
+  seed: 42,
+  size: 1000,
+  step: 0,
+});
+
+const recordText = moves.formatPlainTextRecord({
+  scenario: parsedUrl.scenario,
+  seed: parsedUrl.seed,
+  size: parsedUrl.size,
+  step: parsedUrl.step,
+  changeSql: "UPDATE customers SET region_id = 2 WHERE id = 1",
+  move: moveCust.move,
+  reasonCode: moveCust.reasonCode,
+  arithmeticSummary: zeroDeltaArith,
+  beforeTotals: { "North America": 10000 },
+  afterTotals: { "North America": 10000 },
+});
+
+console.log(JSON.stringify({
+  deps,
+  moveCust,
+  moveOrderFk,
+  moveEmptyBefore,
+  moveNullBefore,
+  zeroDeltaArith,
+  parsedUrl,
+  recordText,
+}));
+"""
+        proc = subprocess.run(
+            [node_bin, "--input-type=module", "-e", node_script],
+            cwd=Path(__file__).resolve().parent.parent.parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        out = json.loads(proc.stdout.strip())
+        assert out["deps"]["columnsByTable"]["orders"]["joinKeys"] == ["customer_id"]
+        assert out["deps"]["columnsByTable"]["orders"]["readCols"] == ["amount_cents"]
+        assert out["deps"]["columnsByTable"]["orders"]["filterCols"] == ["status"]
+        assert set(out["deps"]["columnsByTable"]["customers"]["joinKeys"]) == {
+            "id",
+            "region_id",
+        }
+        assert out["deps"]["columnsByTable"]["regions"]["groupCols"] == ["name"]
+        assert out["moveCust"]["move"] == "FIX IN PLACE"
+        assert out["moveOrderFk"]["move"] == "FIX IN PLACE"
+        assert out["moveEmptyBefore"]["move"] == "REREAD"
+        assert out["moveNullBefore"]["move"] == "REREAD"
+        assert "North America: old $100.00" in out["zeroDeltaArith"]
+        assert "diff +$0.00" in out["zeroDeltaArith"]
+        assert out["parsedUrl"] == {
+            "scenario": "customers_and_regions",
+            "seed": 1,
+            "size": 100,
+            "step": 3,
+            "cap": None,
+        }
+        assert "scenario: customers_and_regions" in out["recordText"]
+        assert "seed: 1" in out["recordText"]
+        assert "size: 100" in out["recordText"]
+        assert "step: 3" in out["recordText"]
+        assert "move: FIX IN PLACE" in out["recordText"]
+
