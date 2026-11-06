@@ -1,0 +1,1284 @@
+{
+ "baselines": {
+  "rows": [
+   {
+    "collateral_flushes": 0,
+    "db_reads": 2000,
+    "hit_rate": 0.0,
+    "label": "uncached",
+    "mean_cached_groups": 0.0,
+    "oracle_checks": 0,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 0.0,
+    "peak_cached_groups": 0,
+    "reads": 2000,
+    "rereads": 0,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 378,
+    "hit_rate": 0.811,
+    "label": "plain",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1622,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 4648.3,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 293,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 392,
+    "hit_rate": 0.804,
+    "label": "ttl-200",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1608,
+    "oracle_mismatches": 1409,
+    "p99_decision_latency_us": 0.0,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 307,
+    "writes": 6000
+   }
+  ],
+  "seconds": 73.7
+ },
+ "e1": {
+  "entropy_full_day_bits": 1.995,
+  "online_loop_rereads": 272,
+  "partitions": {
+   "random-k3": {
+    "avg_amount_paid": "r0",
+    "avg_credit_gold": "r1",
+    "count_customers_by_tier": "r1",
+    "count_low_stock": "r0",
+    "count_orders_by_status": "r0",
+    "count_orders_west": "r1",
+    "count_paid_orders": "r2",
+    "max_amount_by_region": "r1",
+    "sum_amount_by_customer": "r1",
+    "sum_amount_by_region": "r0",
+    "sum_credit_by_region": "r2",
+    "sum_qty_by_warehouse": "r0"
+   },
+   "random-k6": {
+    "avg_amount_paid": "r0",
+    "avg_credit_gold": "r3",
+    "count_customers_by_tier": "r3",
+    "count_low_stock": "r0",
+    "count_orders_by_status": "r0",
+    "count_orders_west": "r3",
+    "count_paid_orders": "r4",
+    "max_amount_by_region": "r3",
+    "sum_amount_by_customer": "r2",
+    "sum_amount_by_region": "r1",
+    "sum_credit_by_region": "r5",
+    "sum_qty_by_warehouse": "r1"
+   },
+   "relation-k3": {
+    "avg_amount_paid": "orders",
+    "avg_credit_gold": "customers",
+    "count_customers_by_tier": "customers",
+    "count_low_stock": "inventory",
+    "count_orders_by_status": "orders",
+    "count_orders_west": "orders",
+    "count_paid_orders": "orders",
+    "max_amount_by_region": "orders",
+    "sum_amount_by_customer": "orders",
+    "sum_amount_by_region": "orders",
+    "sum_credit_by_region": "customers",
+    "sum_qty_by_warehouse": "inventory"
+   },
+   "spectral-invalidated-k3": {
+    "avg_amount_paid": "p2",
+    "avg_credit_gold": "p1",
+    "count_customers_by_tier": "p0",
+    "count_low_stock": "p2",
+    "count_orders_by_status": "p2",
+    "count_orders_west": "p2",
+    "count_paid_orders": "p2",
+    "max_amount_by_region": "p2",
+    "sum_amount_by_customer": "p2",
+    "sum_amount_by_region": "p2",
+    "sum_credit_by_region": "p2",
+    "sum_qty_by_warehouse": "p2"
+   },
+   "spectral-touched-k3": {
+    "avg_amount_paid": "p0",
+    "avg_credit_gold": "p2",
+    "count_customers_by_tier": "p2",
+    "count_low_stock": "p2",
+    "count_orders_by_status": "p0",
+    "count_orders_west": "p0",
+    "count_paid_orders": "p0",
+    "max_amount_by_region": "p2",
+    "sum_amount_by_customer": "p1",
+    "sum_amount_by_region": "p1",
+    "sum_credit_by_region": "p2",
+    "sum_qty_by_warehouse": "p2"
+   },
+   "spectral-touched-k6": {
+    "avg_amount_paid": "p1",
+    "avg_credit_gold": "p3",
+    "count_customers_by_tier": "p3",
+    "count_low_stock": "p4",
+    "count_orders_by_status": "p1",
+    "count_orders_west": "p5",
+    "count_paid_orders": "p1",
+    "max_amount_by_region": "p5",
+    "sum_amount_by_customer": "p0",
+    "sum_amount_by_region": "p0",
+    "sum_credit_by_region": "p3",
+    "sum_qty_by_warehouse": "p2"
+   }
+  },
+  "receipt_chain_intact": true,
+  "receipts": [
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "2d8ed8bd147974a84c53edd27593e7bf9e8b0a1ab7f3a450637f657324bcbbdf",
+      "kind": "repartition",
+      "origin": "spectral-repartition-proposer",
+      "payload": {
+       "k": 3,
+       "partition": {
+        "avg_amount_paid": "p1",
+        "avg_credit_gold": "p2",
+        "count_customers_by_tier": "p2",
+        "count_low_stock": "p2",
+        "count_orders_by_status": "p1",
+        "count_orders_west": "p0",
+        "count_paid_orders": "p1",
+        "max_amount_by_region": "p2",
+        "sum_amount_by_customer": "p1",
+        "sum_amount_by_region": "p0",
+        "sum_credit_by_region": "p2",
+        "sum_qty_by_warehouse": "p2"
+       }
+      },
+      "rationale": "entropy moved from 1.5810771813555022 to 2.141 bits"
+     },
+     "run": "run-4000"
+    },
+    "candidate_id": "2d8ed8bd147974a84c53edd27593e7bf9e8b0a1ab7f3a450637f657324bcbbdf",
+    "hash": "8697f3a5a25568dc2684e7c18e325f9278f9099ccd13a147fb69281805c9be75",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "seq": 0,
+    "step": "proposed"
+   },
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "2d8ed8bd147974a84c53edd27593e7bf9e8b0a1ab7f3a450637f657324bcbbdf",
+      "kind": "repartition",
+      "origin": "spectral-repartition-proposer",
+      "payload": {
+       "k": 3,
+       "partition": {
+        "avg_amount_paid": "p1",
+        "avg_credit_gold": "p2",
+        "count_customers_by_tier": "p2",
+        "count_low_stock": "p2",
+        "count_orders_by_status": "p1",
+        "count_orders_west": "p0",
+        "count_paid_orders": "p1",
+        "max_amount_by_region": "p2",
+        "sum_amount_by_customer": "p1",
+        "sum_amount_by_region": "p0",
+        "sum_credit_by_region": "p2",
+        "sum_qty_by_warehouse": "p2"
+       }
+      },
+      "rationale": "entropy moved from 1.5810771813555022 to 2.141 bits"
+     },
+     "run": "run-4000",
+     "verdict": {
+      "evaluator": "partition-replay-evaluator",
+      "evidence": {
+       "collateral_after": 11,
+       "collateral_before": 0,
+       "improvement": -0.6470588235294118,
+       "reads": 250,
+       "rereads_after": 28,
+       "rereads_before": 17,
+       "writes": 750
+      },
+      "reason": "rereads rise 17 -> 28",
+      "status": "refuted"
+     }
+    },
+    "candidate_id": "2d8ed8bd147974a84c53edd27593e7bf9e8b0a1ab7f3a450637f657324bcbbdf",
+    "hash": "e56b3f37a02f168016abe0aa239d13fb810c217c3036d43d3831fb2d181428f8",
+    "prev_hash": "8697f3a5a25568dc2684e7c18e325f9278f9099ccd13a147fb69281805c9be75",
+    "seq": 1,
+    "step": "evaluated"
+   },
+   {
+    "body": {
+     "memory_size": 1,
+     "reason": "rereads rise 17 -> 28",
+     "run": "run-4000"
+    },
+    "candidate_id": "2d8ed8bd147974a84c53edd27593e7bf9e8b0a1ab7f3a450637f657324bcbbdf",
+    "hash": "0395f4778defe2bc060defaee62d02bfb39bd362b865d8a72308ccd03bf69c1f",
+    "prev_hash": "e56b3f37a02f168016abe0aa239d13fb810c217c3036d43d3831fb2d181428f8",
+    "seq": 2,
+    "step": "learned"
+   },
+   {
+    "body": {
+     "authorization": {
+      "authorizer": "policy",
+      "policy_id": "e1/repartition",
+      "reason": "verdict refuted: rereads rise 17 -> 28",
+      "status": "denied"
+     },
+     "policy": {
+      "auto_approve_kinds": [
+       "repartition"
+      ],
+      "human_review_kinds": [],
+      "improvement_key": "improvement",
+      "max_applied_per_run": null,
+      "min_improvement": 0.05,
+      "policy_id": "e1/repartition"
+     },
+     "run": "run-4000",
+     "verdict_status": "refuted"
+    },
+    "candidate_id": "2d8ed8bd147974a84c53edd27593e7bf9e8b0a1ab7f3a450637f657324bcbbdf",
+    "hash": "534384225d373505c0ef6c2e94fedfac8ec04c21a8a6e4c53b548f20e516bd7d",
+    "prev_hash": "0395f4778defe2bc060defaee62d02bfb39bd362b865d8a72308ccd03bf69c1f",
+    "seq": 3,
+    "step": "authorized"
+   }
+  ],
+  "seconds": 75.2,
+  "static_relation_rereads": 272,
+  "static_rows": [
+   {
+    "collateral_flushes": 0,
+    "db_reads": 378,
+    "hit_rate": 0.811,
+    "label": "relation-k3",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1622,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 690.1,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 293,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 259,
+    "db_reads": 636,
+    "hit_rate": 0.682,
+    "label": "spectral-touched-k3",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1364,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 763.7,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 551,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 414,
+    "db_reads": 786,
+    "hit_rate": 0.607,
+    "label": "spectral-invalidated-k3",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1214,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 1106.5,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 701,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 168,
+    "db_reads": 543,
+    "hit_rate": 0.7285,
+    "label": "random-k3",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1457,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 602.4,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 458,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 378,
+    "hit_rate": 0.811,
+    "label": "spectral-touched-k6",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1622,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 1082.5,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 293,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 56,
+    "db_reads": 433,
+    "hit_rate": 0.7835,
+    "label": "random-k6",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1567,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 779.9,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 348,
+    "writes": 6000
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 378,
+    "hit_rate": 0.811,
+    "label": "plain",
+    "mean_cached_groups": 120.5,
+    "oracle_checks": 1622,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 810.7,
+    "peak_cached_groups": 122,
+    "reads": 2000,
+    "rereads": 293,
+    "writes": 6000
+   }
+  ],
+  "windows": [
+   {
+    "authorization": null,
+    "drifted": true,
+    "entropy_bits": 1.581,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 0
+   },
+   {
+    "authorization": null,
+    "drifted": false,
+    "entropy_bits": 1.585,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 1000
+   },
+   {
+    "authorization": null,
+    "drifted": false,
+    "entropy_bits": 1.606,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 2000
+   },
+   {
+    "authorization": null,
+    "drifted": false,
+    "entropy_bits": 1.595,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 3000
+   },
+   {
+    "authorization": "denied",
+    "drifted": true,
+    "entropy_bits": 2.141,
+    "proposed": 1,
+    "verdict": "refuted: rereads rise 17 -> 28",
+    "window_start": 4000
+   },
+   {
+    "authorization": null,
+    "drifted": false,
+    "entropy_bits": 2.168,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 5000
+   },
+   {
+    "authorization": null,
+    "drifted": false,
+    "entropy_bits": 2.205,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 6000
+   },
+   {
+    "authorization": null,
+    "drifted": false,
+    "entropy_bits": 2.173,
+    "proposed": 0,
+    "verdict": null,
+    "window_start": 7000
+   }
+  ]
+ },
+ "e2": {
+  "applied": {
+   "materialized": [
+    "avg_amount_paid",
+    "avg_credit_gold",
+    "count_customers_by_tier",
+    "count_low_stock",
+    "count_orders_by_status",
+    "count_orders_west",
+    "count_paid_orders",
+    "sum_amount_by_region",
+    "sum_credit_by_region",
+    "sum_qty_by_warehouse"
+   ]
+  },
+  "greedy": {
+   "materialized": [
+    "avg_amount_paid",
+    "avg_credit_gold",
+    "count_low_stock",
+    "count_orders_by_status",
+    "count_orders_west",
+    "count_paid_orders",
+    "sum_amount_by_region",
+    "sum_qty_by_warehouse"
+   ],
+   "search_reward": 401.7
+  },
+  "loop_summary": {
+   "applied": 1,
+   "apply_failed": 0,
+   "approved": 1,
+   "deferred": 0,
+   "denied": 0,
+   "needs_human": 0,
+   "proposal_error_rate": 0.0,
+   "proposed": 1,
+   "refuted": 0,
+   "skipped_known_mistakes": 0,
+   "supported": 1,
+   "underdetermined": 0
+  },
+  "receipt_chain_intact": true,
+  "receipts": [
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "b2ee41f1df334213040be5fa41734eeee01135ab6296a28516971e433cb639e9",
+      "kind": "materialize_set",
+      "origin": "uct-config-proposer",
+      "payload": {
+       "materialized": [
+        "avg_amount_paid",
+        "avg_credit_gold",
+        "count_customers_by_tier",
+        "count_low_stock",
+        "count_orders_by_status",
+        "count_orders_west",
+        "count_paid_orders",
+        "sum_amount_by_region",
+        "sum_credit_by_region",
+        "sum_qty_by_warehouse"
+       ],
+       "memory_cost": 0.5
+      },
+      "rationale": "search reward 398.3 vs 383.4 on the search segment"
+     },
+     "run": "run-1"
+    },
+    "candidate_id": "b2ee41f1df334213040be5fa41734eeee01135ab6296a28516971e433cb639e9",
+    "hash": "7e26473e69f25257adc2c4474f592bb267777be437ac0cdd6ab07f6b8ea00eb3",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "seq": 0,
+    "step": "proposed"
+   },
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "b2ee41f1df334213040be5fa41734eeee01135ab6296a28516971e433cb639e9",
+      "kind": "materialize_set",
+      "origin": "uct-config-proposer",
+      "payload": {
+       "materialized": [
+        "avg_amount_paid",
+        "avg_credit_gold",
+        "count_customers_by_tier",
+        "count_low_stock",
+        "count_orders_by_status",
+        "count_orders_west",
+        "count_paid_orders",
+        "sum_amount_by_region",
+        "sum_credit_by_region",
+        "sum_qty_by_warehouse"
+       ],
+       "memory_cost": 0.5
+      },
+      "rationale": "search reward 398.3 vs 383.4 on the search segment"
+     },
+     "run": "run-1",
+     "verdict": {
+      "evaluator": "held-out-config-evaluator",
+      "evidence": {
+       "db_reads_after": 111,
+       "db_reads_before": 75,
+       "improvement": 0.030525211800920677,
+       "mean_groups_after": 21.4,
+       "mean_groups_before": 115.8,
+       "reads": 500,
+       "reward_after": 378.2955,
+       "reward_before": 367.09000000000003
+      },
+      "reason": "held-out reward 367.1 -> 378.3",
+      "status": "supported"
+     }
+    },
+    "candidate_id": "b2ee41f1df334213040be5fa41734eeee01135ab6296a28516971e433cb639e9",
+    "hash": "b2f9f736342054e73255d87b654078952dcdfb9a473e25e1d830f9ad20737844",
+    "prev_hash": "7e26473e69f25257adc2c4474f592bb267777be437ac0cdd6ab07f6b8ea00eb3",
+    "seq": 1,
+    "step": "evaluated"
+   },
+   {
+    "body": {
+     "authorization": {
+      "authorizer": "policy",
+      "policy_id": "e2/materialize",
+      "reason": "policy e2/materialize auto-approves materialize_set",
+      "status": "approved"
+     },
+     "policy": {
+      "auto_approve_kinds": [
+       "materialize_set"
+      ],
+      "human_review_kinds": [],
+      "improvement_key": "improvement",
+      "max_applied_per_run": null,
+      "min_improvement": 0.02,
+      "policy_id": "e2/materialize"
+     },
+     "run": "run-1",
+     "verdict_status": "supported"
+    },
+    "candidate_id": "b2ee41f1df334213040be5fa41734eeee01135ab6296a28516971e433cb639e9",
+    "hash": "42a201b8738b325b87d8c4e341d68e93eb72f9879289092ee930fcf61b140797",
+    "prev_hash": "b2f9f736342054e73255d87b654078952dcdfb9a473e25e1d830f9ad20737844",
+    "seq": 2,
+    "step": "authorized"
+   },
+   {
+    "body": {
+     "outcome": {
+      "materialized": [
+       "avg_amount_paid",
+       "avg_credit_gold",
+       "count_customers_by_tier",
+       "count_low_stock",
+       "count_orders_by_status",
+       "count_orders_west",
+       "count_paid_orders",
+       "sum_amount_by_region",
+       "sum_credit_by_region",
+       "sum_qty_by_warehouse"
+      ]
+     },
+     "run": "run-1"
+    },
+    "candidate_id": "b2ee41f1df334213040be5fa41734eeee01135ab6296a28516971e433cb639e9",
+    "hash": "a0dc38333a67c707b7b3cb33bbb135e451eb242faaf7da8fdab37be7f09093f6",
+    "prev_hash": "42a201b8738b325b87d8c4e341d68e93eb72f9879289092ee930fcf61b140797",
+    "seq": 3,
+    "step": "applied"
+   }
+  ],
+  "rows": [
+   {
+    "collateral_flushes": 0,
+    "db_reads": 75,
+    "hit_rate": 0.85,
+    "label": "plain (all shapes)",
+    "materialized": 11,
+    "mean_cached_groups": 115.8,
+    "oracle_checks": 425,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 868.3,
+    "peak_cached_groups": 122,
+    "reads": 500,
+    "rereads": 48,
+    "reward": 367.1,
+    "segment": "held-out (same phase)",
+    "writes": 1500
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 113,
+    "hit_rate": 0.774,
+    "label": "greedy-drop",
+    "materialized": 8,
+    "mean_cached_groups": 14.5,
+    "oracle_checks": 387,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 993.1,
+    "peak_cached_groups": 15,
+    "reads": 500,
+    "rereads": 11,
+    "reward": 379.8,
+    "segment": "held-out (same phase)",
+    "writes": 1500
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 111,
+    "hit_rate": 0.778,
+    "label": "uct-search",
+    "materialized": 10,
+    "mean_cached_groups": 21.4,
+    "oracle_checks": 389,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 714.7,
+    "peak_cached_groups": 22,
+    "reads": 500,
+    "rereads": 48,
+    "reward": 378.3,
+    "segment": "held-out (same phase)",
+    "writes": 1500
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 261,
+    "hit_rate": 0.739,
+    "label": "plain (all shapes)",
+    "materialized": 11,
+    "mean_cached_groups": 119.8,
+    "oracle_checks": 739,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 796.1,
+    "peak_cached_groups": 122,
+    "reads": 1000,
+    "rereads": 207,
+    "reward": 679.1,
+    "segment": "next phase",
+    "writes": 3000
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 332,
+    "hit_rate": 0.668,
+    "label": "greedy-drop",
+    "materialized": 8,
+    "mean_cached_groups": 14.8,
+    "oracle_checks": 668,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 1383.8,
+    "peak_cached_groups": 15,
+    "reads": 1000,
+    "rereads": 80,
+    "reward": 660.6,
+    "segment": "next phase",
+    "writes": 3000
+   },
+   {
+    "collateral_flushes": 0,
+    "db_reads": 301,
+    "hit_rate": 0.699,
+    "label": "uct-search",
+    "materialized": 10,
+    "mean_cached_groups": 21.6,
+    "oracle_checks": 699,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 1834.6,
+    "peak_cached_groups": 22,
+    "reads": 1000,
+    "rereads": 207,
+    "reward": 688.2,
+    "segment": "next phase",
+    "writes": 3000
+   }
+  ],
+  "search_stats": {
+   "budget": 30,
+   "depth": 3,
+   "rollouts": 28,
+   "root_children": 11,
+   "search_reward": 398.3315,
+   "start_reward": 383.44325
+  },
+  "seconds": 83.3,
+  "uct": {
+   "materialized": [
+    "avg_amount_paid",
+    "avg_credit_gold",
+    "count_customers_by_tier",
+    "count_low_stock",
+    "count_orders_by_status",
+    "count_orders_west",
+    "count_paid_orders",
+    "sum_amount_by_region",
+    "sum_credit_by_region",
+    "sum_qty_by_warehouse"
+   ]
+  }
+ },
+ "e3": {
+  "applied": true,
+  "loop_summary": {
+   "applied": 1,
+   "apply_failed": 0,
+   "approved": 1,
+   "deferred": 0,
+   "denied": 0,
+   "needs_human": 0,
+   "proposal_error_rate": 0.0,
+   "proposed": 1,
+   "refuted": 0,
+   "skipped_known_mistakes": 0,
+   "supported": 1,
+   "underdetermined": 0
+  },
+  "receipt_chain_intact": true,
+  "receipts": [
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "d0b40a1f7dc384aa850f191d2952b0f0316b651f9371f3729d76d4527be32b93",
+      "kind": "admission_prior",
+      "origin": "admission-prior-proposer",
+      "payload": {
+       "cap": 5,
+       "prior": {
+        "avg_amount_paid": [
+         5.0,
+         1.0
+        ],
+        "avg_credit_gold": [
+         1.0,
+         4.0
+        ],
+        "count_customers_by_tier": [
+         1.0,
+         4.0
+        ],
+        "count_low_stock": [
+         3.0,
+         3.0
+        ],
+        "count_orders_by_status": [
+         6.0,
+         1.0
+        ],
+        "count_orders_west": [
+         6.0,
+         1.0
+        ],
+        "count_paid_orders": [
+         6.0,
+         1.0
+        ],
+        "max_amount_by_region": [
+         1.0,
+         1.0
+        ],
+        "sum_amount_by_customer": [
+         1.0,
+         6.0
+        ],
+        "sum_amount_by_region": [
+         6.0,
+         1.0
+        ],
+        "sum_credit_by_region": [
+         1.0,
+         5.0
+        ],
+        "sum_qty_by_warehouse": [
+         1.0,
+         7.0
+        ]
+       }
+      },
+      "rationale": "posterior from the previous window"
+     },
+     "run": "run-1"
+    },
+    "candidate_id": "d0b40a1f7dc384aa850f191d2952b0f0316b651f9371f3729d76d4527be32b93",
+    "hash": "b7ed8a21172f90048ec36c7b077fecc8130bd5a1af315260d46e3b52ef38160d",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "seq": 0,
+    "step": "proposed"
+   },
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "d0b40a1f7dc384aa850f191d2952b0f0316b651f9371f3729d76d4527be32b93",
+      "kind": "admission_prior",
+      "origin": "admission-prior-proposer",
+      "payload": {
+       "cap": 5,
+       "prior": {
+        "avg_amount_paid": [
+         5.0,
+         1.0
+        ],
+        "avg_credit_gold": [
+         1.0,
+         4.0
+        ],
+        "count_customers_by_tier": [
+         1.0,
+         4.0
+        ],
+        "count_low_stock": [
+         3.0,
+         3.0
+        ],
+        "count_orders_by_status": [
+         6.0,
+         1.0
+        ],
+        "count_orders_west": [
+         6.0,
+         1.0
+        ],
+        "count_paid_orders": [
+         6.0,
+         1.0
+        ],
+        "max_amount_by_region": [
+         1.0,
+         1.0
+        ],
+        "sum_amount_by_customer": [
+         1.0,
+         6.0
+        ],
+        "sum_amount_by_region": [
+         6.0,
+         1.0
+        ],
+        "sum_credit_by_region": [
+         1.0,
+         5.0
+        ],
+        "sum_qty_by_warehouse": [
+         1.0,
+         7.0
+        ]
+       }
+      },
+      "rationale": "posterior from the previous window"
+     },
+     "run": "run-1",
+     "verdict": {
+      "evaluator": "admission-replay-evaluator",
+      "evidence": {
+       "db_reads_flat": 147,
+       "db_reads_learned": 142,
+       "improvement": 0.034013605442176874,
+       "reads": 500
+      },
+      "reason": "db reads 147 -> 142",
+      "status": "supported"
+     }
+    },
+    "candidate_id": "d0b40a1f7dc384aa850f191d2952b0f0316b651f9371f3729d76d4527be32b93",
+    "hash": "0f0d158242007233511bbe63ca5ea75676fd5e550f880154ae8725bea125448a",
+    "prev_hash": "b7ed8a21172f90048ec36c7b077fecc8130bd5a1af315260d46e3b52ef38160d",
+    "seq": 1,
+    "step": "evaluated"
+   },
+   {
+    "body": {
+     "authorization": {
+      "authorizer": "policy",
+      "policy_id": "e3/admission",
+      "reason": "policy e3/admission auto-approves admission_prior",
+      "status": "approved"
+     },
+     "policy": {
+      "auto_approve_kinds": [
+       "admission_prior"
+      ],
+      "human_review_kinds": [],
+      "improvement_key": "improvement",
+      "max_applied_per_run": null,
+      "min_improvement": 0.02,
+      "policy_id": "e3/admission"
+     },
+     "run": "run-1",
+     "verdict_status": "supported"
+    },
+    "candidate_id": "d0b40a1f7dc384aa850f191d2952b0f0316b651f9371f3729d76d4527be32b93",
+    "hash": "77c66cd5ca50f85d66d3dd3d16f8d04bfdbf288ce24709807a849d242ec582ac",
+    "prev_hash": "0f0d158242007233511bbe63ca5ea75676fd5e550f880154ae8725bea125448a",
+    "seq": 2,
+    "step": "authorized"
+   },
+   {
+    "body": {
+     "outcome": {
+      "shapes": 12
+     },
+     "run": "run-1"
+    },
+    "candidate_id": "d0b40a1f7dc384aa850f191d2952b0f0316b651f9371f3729d76d4527be32b93",
+    "hash": "e550798ec532cb651a72bcd5f3c3447ea36ab13b294658e570f1774729568560",
+    "prev_hash": "77c66cd5ca50f85d66d3dd3d16f8d04bfdbf288ce24709807a849d242ec582ac",
+    "seq": 3,
+    "step": "applied"
+   }
+  ],
+  "rows": [
+   {
+    "cap": "none",
+    "collateral_flushes": 0,
+    "db_reads": 261,
+    "hit_rate": 0.739,
+    "label": "plain",
+    "mean_cached_groups": 119.8,
+    "oracle_checks": 739,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 2694.4,
+    "peak_cached_groups": 122,
+    "reads": 1000,
+    "rereads": 207,
+    "writes": 3000
+   },
+   {
+    "cap": 5,
+    "collateral_flushes": 0,
+    "db_reads": 442,
+    "hit_rate": 0.558,
+    "label": "lru-cap5",
+    "mean_cached_groups": 47.0,
+    "oracle_checks": 558,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 4041.3,
+    "peak_cached_groups": 114,
+    "reads": 1000,
+    "rereads": 110,
+    "writes": 3000
+   },
+   {
+    "cap": 5,
+    "collateral_flushes": 0,
+    "db_reads": 419,
+    "hit_rate": 0.581,
+    "label": "lfu-cap5",
+    "mean_cached_groups": 29.9,
+    "oracle_checks": 581,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 1929.6,
+    "peak_cached_groups": 110,
+    "reads": 1000,
+    "rereads": 151,
+    "writes": 3000
+   },
+   {
+    "cap": 5,
+    "collateral_flushes": 0,
+    "db_reads": 415,
+    "hit_rate": 0.585,
+    "label": "thompson-flat-cap5",
+    "mean_cached_groups": 11.6,
+    "oracle_checks": 585,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 1756.8,
+    "peak_cached_groups": 108,
+    "reads": 1000,
+    "rereads": 23,
+    "writes": 3000
+   },
+   {
+    "cap": 5,
+    "collateral_flushes": 0,
+    "db_reads": 544,
+    "hit_rate": 0.456,
+    "label": "thompson-learned-cap5",
+    "mean_cached_groups": 9.8,
+    "oracle_checks": 456,
+    "oracle_mismatches": 0,
+    "p99_decision_latency_us": 957.9,
+    "peak_cached_groups": 109,
+    "reads": 1000,
+    "rereads": 1,
+    "writes": 3000
+   }
+  ],
+  "seconds": 42.5
+ },
+ "e4": {
+  "loop_summary": {
+   "applied": 0,
+   "apply_failed": 0,
+   "approved": 0,
+   "deferred": 0,
+   "denied": 0,
+   "needs_human": 2,
+   "proposal_error_rate": 0.0,
+   "proposed": 2,
+   "refuted": 0,
+   "skipped_known_mistakes": 0,
+   "supported": 1,
+   "underdetermined": 1
+  },
+  "receipt_chain_intact": true,
+  "receipts": [
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "f272f775f5843b1459c5c9c83dbbc3d37558c93b0b11ffb6bc539437c3cbdb7c",
+      "kind": "replica_identity_full",
+      "origin": "reread-suggestion-proposer",
+      "payload": {
+       "missing_columns": [
+        "credit",
+        "region",
+        "tier"
+       ],
+       "table": "customers"
+      },
+      "rationale": "296 invalidations on ['avg_credit_gold', 'count_customers_by_tier', 'sum_credit_by_region'] lacked before-images of ['credit', 'region', 'tier']; ALTER TABLE customers REPLICA IDENTITY FULL (Postgres) or enable before-images in the connector"
+     },
+     "run": "run-1"
+    },
+    "candidate_id": "f272f775f5843b1459c5c9c83dbbc3d37558c93b0b11ffb6bc539437c3cbdb7c",
+    "hash": "b8a9a0649883756397f40f0a422cc1b587267cca530622e98abb8aaf9c3e76fe",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "seq": 0,
+    "step": "proposed"
+   },
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "f272f775f5843b1459c5c9c83dbbc3d37558c93b0b11ffb6bc539437c3cbdb7c",
+      "kind": "replica_identity_full",
+      "origin": "reread-suggestion-proposer",
+      "payload": {
+       "missing_columns": [
+        "credit",
+        "region",
+        "tier"
+       ],
+       "table": "customers"
+      },
+      "rationale": "296 invalidations on ['avg_credit_gold', 'count_customers_by_tier', 'sum_credit_by_region'] lacked before-images of ['credit', 'region', 'tier']; ALTER TABLE customers REPLICA IDENTITY FULL (Postgres) or enable before-images in the connector"
+     },
+     "run": "run-1",
+     "verdict": {
+      "evaluator": "counterfactual-reread-evaluator",
+      "evidence": {
+       "db_reads_after": 85,
+       "db_reads_before": 378,
+       "improvement": 1.0,
+       "rereads_after": 0,
+       "rereads_before": 293,
+       "table": "customers"
+      },
+      "reason": "rereads 293 -> 0 with before-images on customers",
+      "status": "supported"
+     }
+    },
+    "candidate_id": "f272f775f5843b1459c5c9c83dbbc3d37558c93b0b11ffb6bc539437c3cbdb7c",
+    "hash": "a261748af358509b493ff0d858e671d330c391f4d55e9086644ba00dedbee2a9",
+    "prev_hash": "b8a9a0649883756397f40f0a422cc1b587267cca530622e98abb8aaf9c3e76fe",
+    "seq": 1,
+    "step": "evaluated"
+   },
+   {
+    "body": {
+     "authorization": {
+      "authorizer": "policy",
+      "policy_id": "e4/suggestions",
+      "reason": "kind 'replica_identity_full' is reserved for human review",
+      "status": "needs_human"
+     },
+     "policy": {
+      "auto_approve_kinds": [],
+      "human_review_kinds": [
+       "admit_shape",
+       "replica_identity_full"
+      ],
+      "improvement_key": "improvement",
+      "max_applied_per_run": null,
+      "min_improvement": 0.0,
+      "policy_id": "e4/suggestions"
+     },
+     "run": "run-1",
+     "verdict_status": "supported"
+    },
+    "candidate_id": "f272f775f5843b1459c5c9c83dbbc3d37558c93b0b11ffb6bc539437c3cbdb7c",
+    "hash": "a92dd0a940fd2e87b7eea11c71b31e2858df24a16895bc73dbc83e9f567569e9",
+    "prev_hash": "a261748af358509b493ff0d858e671d330c391f4d55e9086644ba00dedbee2a9",
+    "seq": 2,
+    "step": "authorized"
+   },
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "bcfb923b967c1254b5d4b1a54bba654039fd51ad9e9a4cf2d0acf6319d5ca2ab",
+      "kind": "admit_shape",
+      "origin": "reread-suggestion-proposer",
+      "payload": {
+       "mechanism": "SortedMultisetExtremumCache",
+       "shape": "max_amount_by_region"
+      },
+      "rationale": "74 reads of ['max_amount_by_region'] went to the database because MIN/MAX is outside the admitted fragment"
+     },
+     "run": "run-1"
+    },
+    "candidate_id": "bcfb923b967c1254b5d4b1a54bba654039fd51ad9e9a4cf2d0acf6319d5ca2ab",
+    "hash": "a5b520e7e7cf2fc94e93ea19c1d63c81a025983406f467e1224faf93ce10caf5",
+    "prev_hash": "a92dd0a940fd2e87b7eea11c71b31e2858df24a16895bc73dbc83e9f567569e9",
+    "seq": 3,
+    "step": "proposed"
+   },
+   {
+    "body": {
+     "candidate": {
+      "candidate_id": "bcfb923b967c1254b5d4b1a54bba654039fd51ad9e9a4cf2d0acf6319d5ca2ab",
+      "kind": "admit_shape",
+      "origin": "reread-suggestion-proposer",
+      "payload": {
+       "mechanism": "SortedMultisetExtremumCache",
+       "shape": "max_amount_by_region"
+      },
+      "rationale": "74 reads of ['max_amount_by_region'] went to the database because MIN/MAX is outside the admitted fragment"
+     },
+     "run": "run-1",
+     "verdict": {
+      "evaluator": "counterfactual-reread-evaluator",
+      "evidence": {
+       "db_reads": 74,
+       "shape": "max_amount_by_region"
+      },
+      "reason": "74 database reads of max_amount_by_region could become cache hits only with auxiliary extremum state; not replayable here",
+      "status": "underdetermined"
+     }
+    },
+    "candidate_id": "bcfb923b967c1254b5d4b1a54bba654039fd51ad9e9a4cf2d0acf6319d5ca2ab",
+    "hash": "56ba0d8b7bca0628cd755ca0d6801013b373c78982f521a437b62aaf067307b1",
+    "prev_hash": "a5b520e7e7cf2fc94e93ea19c1d63c81a025983406f467e1224faf93ce10caf5",
+    "seq": 4,
+    "step": "evaluated"
+   },
+   {
+    "body": {
+     "authorization": {
+      "authorizer": "policy",
+      "policy_id": "e4/suggestions",
+      "reason": "verdict underdetermined: 74 database reads of max_amount_by_region could become cache hits only with auxiliary extremum state; not replayable here",
+      "status": "needs_human"
+     },
+     "policy": {
+      "auto_approve_kinds": [],
+      "human_review_kinds": [
+       "admit_shape",
+       "replica_identity_full"
+      ],
+      "improvement_key": "improvement",
+      "max_applied_per_run": null,
+      "min_improvement": 0.0,
+      "policy_id": "e4/suggestions"
+     },
+     "run": "run-1",
+     "verdict_status": "underdetermined"
+    },
+    "candidate_id": "bcfb923b967c1254b5d4b1a54bba654039fd51ad9e9a4cf2d0acf6319d5ca2ab",
+    "hash": "598301c64e1e841c108aa6612f83a0d044fc60bae61be0483324cc0c43f43268",
+    "prev_hash": "56ba0d8b7bca0628cd755ca0d6801013b373c78982f521a437b62aaf067307b1",
+    "seq": 5,
+    "step": "authorized"
+   }
+  ],
+  "seconds": 27.4,
+  "suggestions": [
+   {
+    "authorization": {
+     "authorizer": "policy",
+     "policy_id": "e4/suggestions",
+     "reason": "kind 'replica_identity_full' is reserved for human review",
+     "status": "needs_human"
+    },
+    "kind": "replica_identity_full",
+    "payload": {
+     "missing_columns": [
+      "credit",
+      "region",
+      "tier"
+     ],
+     "table": "customers"
+    },
+    "rationale": "296 invalidations on ['avg_credit_gold', 'count_customers_by_tier', 'sum_credit_by_region'] lacked before-images of ['credit', 'region', 'tier']; ALTER TABLE customers REPLICA IDENTITY FULL (Postgres) or enable before-images in the connector",
+    "verdict": {
+     "evaluator": "counterfactual-reread-evaluator",
+     "evidence": {
+      "db_reads_after": 85,
+      "db_reads_before": 378,
+      "improvement": 1.0,
+      "rereads_after": 0,
+      "rereads_before": 293,
+      "table": "customers"
+     },
+     "reason": "rereads 293 -> 0 with before-images on customers",
+     "status": "supported"
+    }
+   },
+   {
+    "authorization": {
+     "authorizer": "policy",
+     "policy_id": "e4/suggestions",
+     "reason": "verdict underdetermined: 74 database reads of max_amount_by_region could become cache hits only with auxiliary extremum state; not replayable here",
+     "status": "needs_human"
+    },
+    "kind": "admit_shape",
+    "payload": {
+     "mechanism": "SortedMultisetExtremumCache",
+     "shape": "max_amount_by_region"
+    },
+    "rationale": "74 reads of ['max_amount_by_region'] went to the database because MIN/MAX is outside the admitted fragment",
+    "verdict": {
+     "evaluator": "counterfactual-reread-evaluator",
+     "evidence": {
+      "db_reads": 74,
+      "shape": "max_amount_by_region"
+     },
+     "reason": "74 database reads of max_amount_by_region could become cache hits only with auxiliary extremum state; not replayable here",
+     "status": "underdetermined"
+    }
+   }
+  ]
+ },
+ "e5": {
+  "rows": [
+   {
+    "actual_db_reads": 792,
+    "actual_hits": 1208,
+    "estimate_seconds": 0.002,
+    "estimated_db_reads": 792,
+    "estimated_hits": 1208,
+    "policy": "lru-cap5"
+   },
+   {
+    "actual_db_reads": 735,
+    "actual_hits": 1265,
+    "estimate_seconds": 0.007,
+    "estimated_db_reads": 735,
+    "estimated_hits": 1265,
+    "policy": "lfu-cap5"
+   }
+  ],
+  "seconds": 22.9
+ },
+ "phase_change_at_write": 3000,
+ "reads": 2000,
+ "seed": 1,
+ "writes": 6000
+}
