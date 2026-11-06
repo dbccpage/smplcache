@@ -409,3 +409,37 @@ def test_bounded_tombstone_cap_latches_to_reread_on_overflow() -> None:
     mgr.rebuild(_sample_star_tables())
     assert mgr.aux_state.tombstone_overflowed is False
     assert mgr.aux_state.total_tombstones() == 0
+
+
+def test_disjoint_update_synchronizes_fk_index_and_handles_unhashable_disjoint_values() -> (
+    None
+):
+    """
+    Verify that a disjoint_columns UPDATE on a resident row keeps fk_index
+    synchronized when another query in SharedJoinAuxPool invalidated on an FK
+    column, and safely ignores unhashable values in disjoint columns.
+    """
+    q1 = extract_join_shape(
+        "SELECT c.tier, SUM(o.amount) FROM orders o "
+        "JOIN customers c ON o.customer_id = c.id "
+        "WHERE o.status = 'PAID' GROUP BY c.tier",
+        name="q1",
+    )
+    mgr = JoinCacheManager(
+        q1,
+        _sample_star_tables(),
+        primary_keys={"customers": "id", "orders": "id"},
+    )
+    # Disjoint column update with an unhashable payload value (list) on resident order 101
+    dec = mgr.process(
+        WriteEvent(
+            relation="orders",
+            old={"id": 101, "memo": "m1"},
+            new={"id": 101, "memo": ["unhashable", "tags"]},
+            event_id="evt_unhashable_memo",
+        )
+    )
+    assert dec.kind == DecisionKind.PRESERVE
+    assert dec.reason == "disjoint_columns"
+    assert mgr.aux_state.table_rows["orders"][101]["memo"] == ["unhashable", "tags"]
+    assert 101 in mgr.aux_state.fk_index[("orders", "customer_id")][1]

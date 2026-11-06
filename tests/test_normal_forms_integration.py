@@ -345,3 +345,97 @@ def test_property_minimal_cover_equivalence_and_lossless_synthesis(
     assert tableau_chase(schema, bcnf_decomp.relations).is_lossless is True
     for r_bcnf in bcnf_decomp.relations:
         assert classify_normal_form(r_bcnf).is_bcnf is True
+
+
+def test_sorted_multiset_extremum_cache_truncation_frontier_never_corrupts_on_insert_after_delete() -> (
+    None
+):
+    """
+    Regression test for Bug 1 (SortedMultisetExtremumCache truncation frontier):
+    With max_window_per_group=2 and initial values [10, 20, 30] (window=[10, 20],
+    truncation_bound=30):
+    1. DELETE(10) shrinks window to [20] (len(win) == 1 < 2, but truncated row 30 remains).
+    2. INSERT(40) must NOT enter the retained window ahead of truncated row 30.
+    3. DELETE(20) exhausts the retained window while {30, 40} remain in the group,
+       so process() must return DecisionKind.INVALIDATE ("extremum_window_exhausted")
+       rather than silently reporting 40 when the true minimum is 30.
+    """
+    shape = QueryShape(
+        relation="orders",
+        agg_fn="min",
+        agg_col="amount",
+        group_cols=("region",),
+        predicate=Predicate.from_eq("status", "PAID"),
+        name="min_amount_by_region",
+    )
+    cache = SortedMultisetExtremumCache.from_rows(
+        shape,
+        [
+            {"id": 1, "region": "us", "status": "PAID", "amount": Decimal("10.00")},
+            {"id": 2, "region": "us", "status": "PAID", "amount": Decimal("20.00")},
+            {"id": 3, "region": "us", "status": "PAID", "amount": Decimal("30.00")},
+        ],
+        agg_fn="min",
+        max_window_per_group=2,
+    )
+    assert cache.values["us"] == Decimal("10.00")
+
+    # 1. Delete 10.00 -> window has [20.00]
+    d1 = cache.process(
+        WriteEvent(
+            relation="orders",
+            old={"id": 1, "region": "us", "status": "PAID", "amount": Decimal("10.00")},
+            event_id="del_10",
+        )
+    )
+    assert d1.kind == DecisionKind.REPAIR
+    assert cache.values["us"] == Decimal("20.00")
+
+    # 2. Insert 40.00 (>= truncation_bound 30.00) -> stays in truncated multiset
+    d2 = cache.process(
+        WriteEvent(
+            relation="orders",
+            new={"id": 4, "region": "us", "status": "PAID", "amount": Decimal("40.00")},
+            event_id="ins_40",
+        )
+    )
+    assert d2.kind == DecisionKind.REPAIR
+    assert cache.values["us"] == Decimal("20.00")
+
+    # 3. Atomic same-group UPDATE of 20.00 -> 15.00 (< truncation_bound 30.00) repairs in place!
+    d3 = cache.process(
+        WriteEvent(
+            relation="orders",
+            old={"id": 2, "region": "us", "status": "PAID", "amount": Decimal("20.00")},
+            new={"id": 2, "region": "us", "status": "PAID", "amount": Decimal("15.00")},
+            event_id="upd_20_to_15",
+        )
+    )
+    assert d3.kind == DecisionKind.REPAIR
+    assert cache.values["us"] == Decimal("15.00")
+
+    # 4. Delete 15.00 -> window is now empty while {30.00, 40.00} remain -> INVALIDATE!
+    d4 = cache.process(
+        WriteEvent(
+            relation="orders",
+            old={"id": 2, "region": "us", "status": "PAID", "amount": Decimal("15.00")},
+            event_id="del_15",
+        )
+    )
+    assert d4.kind == DecisionKind.INVALIDATE
+    assert d4.reason == "extremum_window_exhausted"
+
+
+def test_zaniolo_eknf_classification() -> None:
+    """
+    Verify check_eknf classifies schemas using Zaniolo's (1982) Elementary Key Normal Form:
+    Every non-trivial FD X -> A either has X as a superkey or A as an elementary key attribute.
+    """
+    # R(A, B, C) with AB -> C and C -> B: candidate keys are {A, B} and {A, C};
+    # both are elementary keys, so B belongs to elementary key {A, B} -> satisfies 3NF and E-KNF,
+    # but violates BCNF because C is not a superkey.
+    schema = RelationalSchema("R", ["A", "B", "C"], ["A, B -> C", "C -> B"])
+    rep = classify_normal_form(schema)
+    assert rep.is_3nf is True
+    assert rep.is_eknf is True
+    assert rep.is_bcnf is False

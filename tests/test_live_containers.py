@@ -189,27 +189,38 @@ def test_live_postgres16_3nf_lift_wal_and_cold_rebuild() -> None:
             )
             wal_proc = WalStreamProcessor(
                 shape=jshape,
+                cache=AggregateCache(
+                    dict(pool.caches[jshape.name].values),
+                    dict(pool.caches[jshape.name]._group_state),
+                    True,
+                ),
                 aux_state=pool.aux_state,
                 numeric_cols=frozenset({"amount"}),
             )
-            ev_tier = adapt_wal_payload(
-                encode_debezium_envelope(
-                    WriteEvent(
-                        relation=cust_table,
-                        old={"customer_id": 10, "region": "us", "tier": "gold"},
-                        new={"customer_id": 10, "region": "us", "tier": "platinum"},
-                    ),
-                    tx_id="501",
-                    lsn=1001,
+            assert wal_proc.feed({"status": "BEGIN", "id": "501", "lsn": 1000}) == []
+            assert wal_proc.boundary_clock == "1000"
+            data_env = encode_debezium_envelope(
+                WriteEvent(
+                    relation=cust_table,
+                    old={"customer_id": 10, "region": "us", "tier": "gold"},
+                    new={"customer_id": 10, "region": "us", "tier": "platinum"},
                 ),
-                numeric_cols={"amount"},
+                tx_id="501",
+                lsn=1001,
             )
+            assert wal_proc.feed(data_env) == []
+            assert wal_proc.boundary_clock == "1001"
+            commit_decs = wal_proc.feed({"status": "COMMIT", "id": "501", "lsn": 1002})
+            assert len(commit_decs) == 1
+            assert commit_decs[0][1].kind == DecisionKind.PRESERVE
+            assert wal_proc.boundary_clock == "1002"
+
+            ev_tier = adapt_wal_payload(data_env, numeric_cols={"amount"})
             assert ev_tier is not None
             assert ev_tier.boundary_clock == "1001"
             d_tier = pool.process_event(ev_tier)[jshape.name]
             assert d_tier.kind == DecisionKind.PRESERVE
             assert d_tier.certificate.boundary_clock == "1001"
-            assert wal_proc.boundary_clock is None
 
             # 2. Repairable order amount update -> REPAIR
             cur.execute(f"UPDATE {ord_table} SET amount = 85.00 WHERE order_id = 2;")

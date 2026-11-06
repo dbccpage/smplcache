@@ -143,7 +143,7 @@ Based on our line-by-line audit of `smplcache` (`v0.1.0`), the product build mus
    - Port and integrate the pure relational normalization and incremental extremum domain logic from `simplex-normal-forms` directly into `smplcache/normal_forms.py`:
      - Functional dependency representation (`FunctionalDependency`), attribute closure (`attribute_closure`), minimal cover (`minimal_cover`), candidate key discovery (`candidate_keys`), normal form classification (`classify_normal_form`: 1NF / 2NF / 3NF / BCNF).
      - **Bernstein 3NF Synthesis** (`synthesize_3nf`) and **Tsou-Fischer BCNF Decomposition** (`decompose_bcnf`).
-     - **Tableau Chase** (`tableau_chase`) proving whether a decomposition is lossless or generating a concrete multi-row counterexample showing spurious tuples on natural join.
+     - **Tableau Chase** (`tableau_chase`) checking whether a decomposition is lossless or generating a concrete multi-row counterexample showing spurious tuples on natural join.
      - **Topological DDL Emitter** (`generate_sql_ddl`) for PostgreSQL 16 and SQL Server 2022 (`CREATE TABLE` ordered by FK DAG + `CREATE INDEX` on foreign keys).
      - **Incremental Sorted-Multiset Extremum Maintenance (`MIN` / `MAX`):** Extend `SmplCache` with bounded sorted-multiset (`BTree` / sorted frequency map) support for `MIN` and `MAX` aggregates with explicit capacity-bound fallback to `REREAD` when the extremum group is deleted and the bounded multiset window is exhausted.
      - **Class D FD Group-Key Reduction in `smplcache doctor`:** Automatically detect when a query `GROUP BY X, Y` includes attributes $Y$ functionally determined by $X$ ($X \to Y$ under the schema's FD closure), allowing $Y$ to be projected outside the grouping key.

@@ -363,28 +363,74 @@ def check_3nf(schema: RelationalSchema) -> tuple[bool, list[str]]:
     return len(violations) == 0 and ok_2nf, violations
 
 
+def _is_elementary_fd(
+    determinant: frozenset[str],
+    attr: str,
+    all_fds: Iterable[FunctionalDependency],
+) -> bool:
+    """
+    An FD X -> A is an elementary functional dependency if X != empty,
+    A not in X, and there is no proper subset X' subset X such that X' -> A
+    holds in F+.
+    """
+    if not determinant or attr in determinant:
+        return False
+    if attr not in attribute_closure(determinant, all_fds):
+        return False
+    for a in determinant:
+        reduced = determinant - {a}
+        if attr in attribute_closure(reduced, all_fds):
+            return False
+    return True
+
+
+def find_elementary_keys(schema: RelationalSchema) -> list[frozenset[str]]:
+    """
+    Find all elementary keys of a relation schema (Zaniolo 1982).
+    X is an elementary key if there exists some attribute A such that X -> A
+    is a full (elementary) FD AND X is a superkey of R.
+    """
+    cks = find_candidate_keys(schema)
+    elementary_keys: set[frozenset[str]] = set(cks)
+    cover = compute_minimal_cover(schema.functional_dependencies)
+    for fd in cover:
+        for attr in fd.dependent - fd.determinant:
+            if is_superkey(fd.determinant, cks) and _is_elementary_fd(
+                fd.determinant, attr, cover
+            ):
+                elementary_keys.add(fd.determinant)
+    return sorted(elementary_keys, key=lambda k: (len(k), tuple(sorted(k))))
+
+
 def check_eknf(schema: RelationalSchema) -> tuple[bool, list[str]]:
     """
-    Check Elementary Key Normal Form (E-KNF).
+    Check Elementary Key Normal Form (E-KNF, Zaniolo 1982):
+    A schema R is in E-KNF iff for every non-trivial FD X -> A in F+:
+      1. X is a superkey (or elementary key), OR
+      2. A is an elementary key attribute (belongs to at least one elementary key).
     """
-    ok_3nf, v_3nf = check_3nf(schema)
-    violations = list(v_3nf)
+    ok_1nf, v_1nf = check_1nf(schema)
+    if not ok_1nf:
+        return False, v_1nf
+
     cks = find_candidate_keys(schema)
+    elem_keys = find_elementary_keys(schema)
+    elem_prime_attrs: frozenset[str] = (
+        frozenset().union(*elem_keys) if elem_keys else frozenset()
+    )
     cover = compute_minimal_cover(schema.functional_dependencies)
+    violations: list[str] = []
 
     for fd in cover:
         for attr in sorted(fd.dependent - fd.determinant):
-            if is_superkey(fd.determinant, cks):
-                continue
-            is_elementary_key = any(ck == fd.determinant for ck in cks)
-            if not is_elementary_key:
+            if not is_superkey(fd.determinant, cks) and attr not in elem_prime_attrs:
                 msg = (
                     f"E-KNF violation: {{{', '.join(sorted(fd.determinant))}}} -> '{attr}' "
-                    f"has a non-superkey determinant."
+                    f"(determinant is not a superkey and '{attr}' is not in any elementary key)."
                 )
                 if msg not in violations:
                     violations.append(msg)
-    return len(violations) == 0 and ok_3nf, violations
+    return len(violations) == 0, violations
 
 
 def check_bcnf(schema: RelationalSchema) -> tuple[bool, list[str]]:
@@ -489,8 +535,6 @@ def classify_normal_form(
 
     if ok_bc:
         highest = "BCNF"
-    elif ok_ek:
-        highest = "E-KNF"
     elif ok_3:
         highest = "3NF"
     elif ok_2:
@@ -1367,6 +1411,7 @@ class SortedMultisetExtremumCache:
     _windows: dict[Any, list[Any]] = field(default_factory=dict, repr=False)
     _group_counts: dict[Any, int] = field(default_factory=dict, repr=False)
     _truncated_groups: set[Any] = field(default_factory=set, repr=False)
+    _truncation_bound: dict[Any, Any] = field(default_factory=dict, repr=False)
     _from_rows: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -1406,6 +1451,7 @@ class SortedMultisetExtremumCache:
         self._windows.clear()
         self._group_counts.clear()
         self._truncated_groups.clear()
+        self._truncation_bound.clear()
         self.is_invalidated = False
         self._from_rows = True
 
@@ -1429,21 +1475,19 @@ class SortedMultisetExtremumCache:
     def _insert_into_group(self, g_key: Any, comp_v: Any) -> bool:
         """
         Insert `comp_v` into group `g_key`'s sorted window.
-        Returns False if `g_key` is already truncated and `comp_v` falls outside
-        the retained extremal window (which for an INSERT beyond the retained bound
-        means it cannot be the new extremum, though it increases `_group_counts`).
+        When `g_key` is truncated (`g_key in self._truncation_bound`), any incoming
+        value that is worse than or equal to the truncation frontier `tau` belongs
+        in the truncated multiset rather than the retained window, preventing an
+        inserted non-extremal value from jumping ahead of previously truncated values.
         """
         win = self._windows.setdefault(g_key, [])
         self._group_counts[g_key] = self._group_counts.get(g_key, 0) + 1
 
-        if (
-            g_key in self._truncated_groups
-            and self.max_window_per_group is not None
-            and len(win) >= self.max_window_per_group
-        ):
-            if self.agg_fn == "min" and comp_v >= win[-1]:
+        if g_key in self._truncated_groups and g_key in self._truncation_bound:
+            tau = self._truncation_bound[g_key]
+            if self.agg_fn == "min" and comp_v >= tau:
                 return True
-            if self.agg_fn == "max" and comp_v <= win[0]:
+            if self.agg_fn == "max" and comp_v <= tau:
                 return True
 
         bisect.insort(win, comp_v)
@@ -1453,12 +1497,28 @@ class SortedMultisetExtremumCache:
         ):
             self._truncated_groups.add(g_key)
             if self.agg_fn == "min":
-                win.pop()  # drop largest, keep smallest W
+                evicted = win.pop()  # drop largest, keep smallest W
+                if g_key in self._truncation_bound:
+                    if evicted < self._truncation_bound[g_key]:
+                        self._truncation_bound[g_key] = evicted
+                else:
+                    self._truncation_bound[g_key] = evicted
             else:
-                win.pop(0)  # drop smallest, keep largest W
+                evicted = win.pop(0)  # drop smallest, keep largest W
+                if g_key in self._truncation_bound:
+                    if evicted > self._truncation_bound[g_key]:
+                        self._truncation_bound[g_key] = evicted
+                else:
+                    self._truncation_bound[g_key] = evicted
         return True
 
-    def _remove_from_group(self, g_key: Any, comp_v: Any) -> bool:
+    def _remove_from_group(
+        self,
+        g_key: Any,
+        comp_v: Any,
+        *,
+        allow_empty_window: bool = False,
+    ) -> bool:
         """
         Remove one occurrence of `comp_v` from `g_key`.
         Returns False if the bounded window was exhausted (`extremum_window_exhausted`)
@@ -1476,24 +1536,40 @@ class SortedMultisetExtremumCache:
                 self._windows.pop(g_key, None)
                 self._group_counts.pop(g_key, None)
                 self._truncated_groups.discard(g_key)
+                self._truncation_bound.pop(g_key, None)
                 return True
-            if not win and self._group_counts[g_key] > 0:
+            if not win and self._group_counts[g_key] > 0 and not allow_empty_window:
                 # All W retained extremal elements were deleted while truncated rows remain!
                 return False
             return True
 
         # Value was not in the retained window: only valid if group was truncated
-        # and comp_v lies strictly beyond the retained window boundary.
-        if g_key in self._truncated_groups and win:
-            if self.agg_fn == "min" and comp_v >= win[-1]:
+        # and comp_v lies at or beyond the truncation frontier.
+        if g_key in self._truncated_groups and g_key in self._truncation_bound:
+            tau = self._truncation_bound[g_key]
+            if self.agg_fn == "min" and comp_v >= tau:
                 self._group_counts[g_key] = total_cnt - 1
                 if self._group_counts[g_key] <= len(win):
                     self._truncated_groups.discard(g_key)
+                    self._truncation_bound.pop(g_key, None)
+                if (
+                    not win
+                    and self._group_counts.get(g_key, 0) > 0
+                    and not allow_empty_window
+                ):
+                    return False
                 return True
-            if self.agg_fn == "max" and comp_v <= win[0]:
+            if self.agg_fn == "max" and comp_v <= tau:
                 self._group_counts[g_key] = total_cnt - 1
                 if self._group_counts[g_key] <= len(win):
                     self._truncated_groups.discard(g_key)
+                    self._truncation_bound.pop(g_key, None)
+                if (
+                    not win
+                    and self._group_counts.get(g_key, 0) > 0
+                    and not allow_empty_window
+                ):
+                    return False
                 return True
         return False
 
@@ -1601,19 +1677,30 @@ class SortedMultisetExtremumCache:
         if old_in and new_in and old_g == new_g and old_v == new_v:
             return Decision.preserve("noop_update", cert)
 
+        same_group_replace = (
+            old_in
+            and new_in
+            and old_g == new_g
+            and old_v is not None
+            and new_v is not None
+        )
+
         if old_in and old_v is not None:
-            ok_rem = self._remove_from_group(old_g, old_v)
+            ok_rem = self._remove_from_group(
+                old_g, old_v, allow_empty_window=same_group_replace
+            )
             if not ok_rem:
                 self.is_invalidated = True
                 return Decision.invalidate("extremum_window_exhausted", cert)
-            self._refresh_group_value(old_g)
+            if not same_group_replace:
+                self._refresh_group_value(old_g)
 
         if new_in and new_v is not None:
-            # If the group is already truncated and new_v lies worse than the worst retained
-            # value in the window, we cannot know its exact rank relative to other truncated
-            # values if it were supposed to fall inside the window; check if new_v is worse
-            # than the retained window tail.
             self._insert_into_group(new_g, new_v)
+            win_after = self._windows.get(new_g, [])
+            if not win_after and self._group_counts.get(new_g, 0) > 0:
+                self.is_invalidated = True
+                return Decision.invalidate("extremum_window_exhausted", cert)
             self._refresh_group_value(new_g)
 
         cert.repair_program = f"{self.agg_fn}_sorted_multiset_by_group"
@@ -1652,6 +1739,7 @@ __all__ = [
     "decompose_bcnf_tree",
     "detect_fd_redundant_group_cols",
     "find_candidate_keys",
+    "find_elementary_keys",
     "generate_sql_ddl",
     "is_lossless_binary_split",
     "is_lossless_decomposition",

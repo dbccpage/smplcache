@@ -12,6 +12,7 @@ Unlike traditional heuristic caches that flush everything or rely on logical rep
   - [Theorem 7 & Boundary Certificates](docs/wiki/Theorem-7-and-Boundary-Certificates.md)
   - [Simplex Normal Forms & Theorem 9 Lifts](docs/wiki/Simplex-Normal-Forms-and-Theorem-9-Lifts.md)
   - [Bounded Join Maintenance & W-TinyLFU](docs/wiki/Bounded-Join-Maintenance-and-W-TinyLFU.md)
+  - [Benchmarks & Live Container Verification](docs/wiki/Benchmarks-and-Live-Container-Verification.md)
 - [Acquirer Technical Due Diligence Data Room](docs/ACQUIRER_DUE_DILIGENCE_DATA_ROOM.md)
 - [15-Minute Adoption Quickstart](docs/quickstart_15_minute_adoption.md)
 - [8-Level Pedagogical Curriculum](docs/pedagogical_8_level_curriculum.md)
@@ -160,7 +161,7 @@ production concurrency remain integration work.
 eviction tombstones (bounded by `max_tombstones`), frequency history, output groups,
 and transient work also use memory. Decimal sums retain finite input digits; displayed
 `AVG` division follows the active Decimal context and is not an exact rational or a
-cross-database rounding guarantee under all dialects.
+cross-database rounding assurance under all dialects.
 
 Join maintenance requires each right-side join key to be that table's primary
 key. The default key name is `id`; provide the same accurate `primary_keys`

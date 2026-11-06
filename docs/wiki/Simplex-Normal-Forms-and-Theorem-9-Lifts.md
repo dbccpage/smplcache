@@ -20,7 +20,7 @@ When a denormalized table stores transitive or partial functional dependencies (
 - **`tableau_chase(schema, sub_relations)`**: Classical Tableau Chase algorithm over distinguished ($a_j$) and non-distinguished ($b_{i,j}$) variables. If a decomposition is lossy, `tableau_chase` constructs a concrete counterexample relation instance $I$ where the natural join of projections produces a spurious tuple not in $I$.
 - **`generate_sql_ddl(tables, dialect)`**: Emits topologically sorted `CREATE TABLE` and foreign-key covering index DDL for PostgreSQL 16 (`postgres`) and SQL Server 2022 (`mssql`).
 - **`detect_fd_redundant_group_cols(shape, fds)`**: Identifies `GROUP BY` columns functionally determined by other `GROUP BY` or equality-bound `WHERE` columns so query shapes can shrink their required CDC column footprint.
-- **`SortedMultisetExtremumCache`**: Maintains `MIN` and `MAX` group aggregates incrementally in $O(\log W)$ time per group using a bounded sorted multiset window (`max_window_size`), falling back to `INVALIDATE` (`window_exhausted_on_extremum_delete`) only when deletions exhaust the retained top-$W$ window.
+- **`SortedMultisetExtremumCache`**: Maintains `MIN` and `MAX` group aggregates incrementally in $O(\log W)$ time per group using a bounded sorted multiset window (`max_window_per_group`), falling back to `INVALIDATE` (`extremum_window_exhausted`) only when deletions exhaust the retained top-$W$ window while truncated elements remain in that group.
 
 ## Claim Hygiene Summary
 

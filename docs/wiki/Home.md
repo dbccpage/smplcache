@@ -10,15 +10,17 @@ Welcome to the technical documentation for **SmplCache**, a boundary-certified i
    How `smplcache.normal_forms` computes functional dependency closures, minimal covers, candidate keys, Bernstein 3NF synthesis, Tsou-Fischer BCNF decomposition, Tableau Chase losslessness checks, and Class D group-key reductions.
 3. **[Bounded Join Maintenance and W-TinyLFU](Bounded-Join-Maintenance-and-W-TinyLFU.md)**
    How `JoinAuxState` and `SharedJoinAuxPool` maintain $O(1)$ primary-key and secondary foreign-key indices under a hard memory budget (`max_total_rows` and `max_tombstones`) using segmented W-TinyLFU admission and fail-closed tombstone tracking.
+4. **[Benchmarks and Live Container Verification](Benchmarks-and-Live-Container-Verification.md)**
+   How the test suite verifies `SmplCache` and `smplcache.normal_forms` against live PostgreSQL 16, SQL Server 2022, and MongoDB 7 containers alongside SQLite and DuckDB cold-rebuild substrates.
 
 ## Quick CLI Reference
 
 ```bash
 # 1. Inspect workload co-invalidation and repair vs. invalidate ratios
-smplcache analyze examples/ecommerce_before.json
+smplcache report examples/ecommerce_before.json
 
 # 2. Compute simplicial nerve topology and isolated singleton shapes
-smplcache topomap examples/ecommerce_before.json
+smplcache report examples/ecommerce_before.json --topomap
 
 # 3. Inspect SQL ASTs for non-SARGable predicates, implicit conversions, and FD-redundant GROUP BY columns
 smplcache doctor examples/ecommerce_before.json
@@ -29,7 +31,7 @@ smplcache normalize examples/ecommerce_before.json --dialect postgres --format m
 
 ## Claim Hygiene Summary
 
-1. **What this documentation supports:** Scoped engineering reference for the admitted SQL fragment (`SELECT ... FROM ... [INNER JOIN] ... WHERE ... GROUP BY`), exact integer/tuple group aggregation (`SUM`, `COUNT`, `AVG`), and `SortedMultisetExtremumCache` (`MIN`, `MAX`).
-2. **What this documentation does not support:** Arbitrary SQL outside the admitted allowlist (such as `HAVING`, window functions, recursive CTEs, or `OUTER JOIN`), or unverified float arithmetic.
+1. **What this documentation supports:** Scoped engineering reference for the admitted SQL fragment (`SELECT ... FROM ... [INNER | LEFT JOIN] ... WHERE ... GROUP BY`), exact integer/Decimal/tuple group aggregation (`SUM`, `COUNT`, `AVG`), and `SortedMultisetExtremumCache` (`MIN`, `MAX`).
+2. **What this documentation does not support:** Arbitrary SQL outside the admitted allowlist (such as `HAVING`, window functions, recursive CTEs, or `RIGHT`/`FULL OUTER JOIN`), or unverified float arithmetic.
 3. **Narrowest defensible claim:** Under the declared schema, primary-key uniqueness, and complete CDC/WAL before/after row images, `SmplCache` either updates cached group aggregates in place or emits a fail-closed `INVALIDATE` (`REREAD`) certificate when required evidence is missing or evicted.
 4. **Next test needed:** Multi-node distributed lease coordination benchmarks under concurrent CDC partition rebalancing.

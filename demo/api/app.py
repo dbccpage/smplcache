@@ -399,6 +399,12 @@ def create_app(
         payload: NormalizeRequestPayload, request: Request
     ) -> dict[str, Any]:
         client_host = request.client.host if request.client else "local"
+        if trust_render_edge:
+            candidate = request.headers.get("cf-connecting-ip", "")
+            try:
+                client_host = str(ipaddress.ip_address(candidate))
+            except ValueError:
+                client_host = "render-unknown-client"
         if not rate_limiter.allow(client_host):
             raise HTTPException(
                 status_code=429,

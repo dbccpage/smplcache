@@ -103,6 +103,7 @@ from smplcache.normal_forms import (
     decompose_bcnf_tree,
     detect_fd_redundant_group_cols,
     find_candidate_keys,
+    find_elementary_keys,
     generate_sql_ddl,
     is_lossless_binary_split,
     is_lossless_decomposition,
@@ -114,7 +115,7 @@ from smplcache.normal_forms import (
     tableau_chase,
 )
 from smplcache.sqlshape import SqlShapeContext, check_cdc_evidence
-from smplcache.substrate import ColdRebuildSubstrate, HAS_DUCKDB
+from smplcache.substrate import ColdRebuildAdapter, ColdRebuildSubstrate, HAS_DUCKDB
 
 __all__ = [
     "DEFAULT_BUDGET_GRID",
@@ -132,6 +133,7 @@ __all__ = [
     "Certificate",
     "ChaseResult",
     "ChaseStep",
+    "ColdRebuildAdapter",
     "ColdRebuildSubstrate",
     "CountMinSketch",
     "Decision",
@@ -189,6 +191,7 @@ __all__ = [
     "evaluate_bundle_for_budget",
     "evaluate_phase_rotated_bundle",
     "find_candidate_keys",
+    "find_elementary_keys",
     "format_adaptive_pool_sweep_csv",
     "format_adaptive_pool_sweep_markdown",
     "format_benchmark_results",

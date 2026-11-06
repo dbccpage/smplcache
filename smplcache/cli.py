@@ -38,6 +38,7 @@ from smplcache.extractor import parse_join_sql, parse_sql
 from smplcache.normal_forms import (
     FunctionalDependency,
     RelationalSchema,
+    attribute_closure,
     candidate_keys,
     classify_normal_form,
     decompose_bcnf,
@@ -189,11 +190,11 @@ def _event_from_dict(e: Mapping[str, Any], index: int) -> WriteEvent:
     )
     return WriteEvent(
         relation=str(e.get("relation", "")),
-        changed_cols=set(e.get("changed_cols", [])),
-        old=dict(e.get("old", {})),
-        new=dict(e.get("new", {})),
+        changed_cols=set(e.get("changed_cols") or []),
+        old=dict(e.get("old") or {}),
+        new=dict(e.get("new") or {}),
         event_id=evt_id,
-        explicit_operation=e.get("operation"),
+        explicit_operation=e.get("operation") or e.get("explicit_operation"),
     )
 
 
@@ -1322,6 +1323,8 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> dict[str, An
             bcnf_dec = decompose_bcnf(rs)
             chase_3nf = tableau_chase(rs, [t.attributes for t in synth_3nf])
             chase_bcnf = tableau_chase(rs, [t.attributes for t in bcnf_dec.tables])
+            pg_ddl = generate_sql_ddl(bcnf_dec.tables, dialect="postgres").ddl_script
+            ms_ddl = generate_sql_ddl(bcnf_dec.tables, dialect="mssql").ddl_script
             nf_summaries.append(
                 {
                     "relation": rs.name,
@@ -1332,6 +1335,8 @@ def compare_workloads(path_a: str, path_b: str, format_md: bool) -> dict[str, An
                     ],
                     "chase_3nf_lossless": chase_3nf.is_lossless,
                     "chase_bcnf_lossless": chase_bcnf.is_lossless,
+                    "postgres_ddl": pg_ddl,
+                    "mssql_ddl": ms_ddl,
                 }
             )
 
@@ -1445,6 +1450,19 @@ def normalize_workload_or_schema(
     for rs in rel_schemas:
         min_cov = minimal_cover(rs.functional_dependencies)
         cand_keys = candidate_keys(rs)
+        fd_closures: dict[str, list[str]] = {}
+        seen_dets: list[frozenset[str]] = []
+        for fd in rs.functional_dependencies:
+            if fd.determinant not in seen_dets:
+                seen_dets.append(fd.determinant)
+        for ck in cand_keys:
+            if ck not in seen_dets:
+                seen_dets.append(ck)
+        for det in seen_dets:
+            det_key = ", ".join(sorted(det))
+            fd_closures[det_key] = sorted(
+                attribute_closure(det, rs.functional_dependencies)
+            )
         nf_report = classify_normal_form(rs)
         tables_3nf = synthesize_3nf(rs)
         bcnf_res = decompose_bcnf(rs)
@@ -1485,6 +1503,7 @@ def normalize_workload_or_schema(
             {
                 "relation": rs.name,
                 "attributes": sorted(rs.attributes),
+                "fd_closure": fd_closures,
                 "minimal_cover": [
                     {
                         "determinant": sorted(fd.determinant),
@@ -1561,6 +1580,12 @@ def run_normalize(
                 "(" + ", ".join(k) + ")" for k in rel["candidate_keys"]
             )
             print(f"- **Candidate Keys:** `{keys_str}`")
+            if rel.get("fd_closure"):
+                closure_str = "; ".join(
+                    f"{{{k}}}+ = {{{', '.join(v)}}}"
+                    for k, v in rel["fd_closure"].items()
+                )
+                print(f"- **FD Closure:** `{closure_str}`")
             print(f"- **Highest Normal Form:** `{rel['highest_normal_form']}`")
             if rel["violations"]:
                 print("- **Violations:**")
@@ -1591,6 +1616,12 @@ def run_normalize(
                 "(" + ", ".join(k) + ")" for k in rel["candidate_keys"]
             )
             print(f"Candidate Keys:      {keys_str}")
+            if rel.get("fd_closure"):
+                closure_str = "; ".join(
+                    f"{{{k}}}+ = {{{', '.join(v)}}}"
+                    for k, v in rel["fd_closure"].items()
+                )
+                print(f"FD Closure:          {closure_str}")
             print(f"Highest Normal Form: {rel['highest_normal_form']}")
             s3 = rel["synthesis_3nf"]
             print(f"3NF Lossless Chase:  {s3['is_lossless']}")

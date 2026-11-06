@@ -267,3 +267,53 @@ def test_substrate_cold_rebuild_join_and_extremum() -> None:
     substrate.rebuild_extremum_cache(ext_cache)
     assert ext_cache.values == {10: Decimal("60.00"), 20: Decimal("75.00")}
     substrate.close()
+
+
+def test_substrate_missing_before_image_update_and_sqlite_exact_decimal_sum() -> None:
+    """
+    Regression test for:
+    1. ColdRebuildSubstrate.apply_write_event applying an UPDATE when old=None
+       (REPLICA IDENTITY NOTHING / missing before-image), so process_or_rebuild
+       rebuilds the fresh post-update state rather than stale data.
+    2. Exact SQLite Decimal SUM/AVG (0.10 + 0.20 == 0.30, zero IEEE-754 float drift)
+       and Decimal GROUP BY keys.
+    """
+    substrate = ColdRebuildSubstrate(backend="sqlite")
+    rows = [
+        {"id": 1, "grp": "A", "rate": Decimal("0.10"), "amt": Decimal("0.10")},
+        {"id": 2, "grp": "A", "rate": Decimal("0.10"), "amt": Decimal("0.20")},
+    ]
+    substrate.create_and_seed_table("ledger", rows, pk_col="id")
+
+    shape = parse_sql(
+        "SELECT grp, SUM(amt) FROM ledger GROUP BY grp", name="sum_ledger"
+    ).shape
+    assert shape is not None
+
+    cache = substrate.rebuild_aggregate_cache(shape)
+    oracle = AggregateCache.from_rows(shape, rows)
+    assert cache.values == oracle.values == {"A": Decimal("0.30")}
+
+    # Grouping by a Decimal column in SQLite also works without float TypeError
+    rate_shape = parse_sql(
+        "SELECT rate, SUM(amt) FROM ledger GROUP BY rate", name="sum_by_rate"
+    ).shape
+    assert rate_shape is not None
+    rate_cache = substrate.rebuild_aggregate_cache(rate_shape)
+    assert rate_cache.values == {Decimal("0.10"): Decimal("0.30")}
+
+    # UPDATE event with old=None (missing before-image) and apply_to_substrate=True
+    ev_missing_old = WriteEvent(
+        relation="ledger",
+        explicit_operation="UPDATE",
+        old=None,
+        new={"id": 2, "grp": "A", "rate": Decimal("0.10"), "amt": Decimal("0.45")},
+        event_id="upd_no_old",
+    )
+    dec, cache, rebuilt = substrate.process_or_rebuild(
+        shape, cache, ev_missing_old, apply_to_substrate=True
+    )
+    assert dec.kind == DecisionKind.INVALIDATE
+    assert rebuilt is True
+    assert cache.values == {"A": Decimal("0.55")}
+    substrate.close()

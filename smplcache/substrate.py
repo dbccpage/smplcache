@@ -64,6 +64,22 @@ def _db_bind_val(val: Any) -> Any:
     return val
 
 
+class _SqliteDecimalSum:
+    """Custom SQLite aggregate function accumulating exact `Decimal` sums without IEEE-754 float drift."""
+
+    def __init__(self) -> None:
+        self.total = Decimal(0)
+        self.has_value = False
+
+    def step(self, value: Any) -> None:
+        if value is not None:
+            self.total += Decimal(str(value))
+            self.has_value = True
+
+    def finalize(self) -> str | None:
+        return str(self.total) if self.has_value else None
+
+
 class ColdRebuildSubstrate:
     """
     SQL substrate adapter (supporting built-in `sqlite3` and optional `duckdb`)
@@ -95,6 +111,9 @@ class ColdRebuildSubstrate:
         else:
             raise ValueError(f"Unsupported substrate backend: {backend!r}")
 
+        if self.backend == "sqlite" and hasattr(self.conn, "create_aggregate"):
+            self.conn.create_aggregate("SMPL_DEC_SUM", 1, _SqliteDecimalSum)
+
         self._table_columns: dict[str, tuple[str, ...]] = {}
         self._table_decimal_cols: dict[str, set[str]] = {}
         self._table_pk_cols: dict[str, str] = {}
@@ -114,6 +133,7 @@ class ColdRebuildSubstrate:
     ) -> None:
         rel = normalize_relation(table_name)
         q_table = _quote_ident(rel)
+        lower_rows = [{str(k).lower(): v for k, v in r.items()} for r in rows]
 
         col_order: list[str] = []
         if columns:
@@ -121,9 +141,8 @@ class ColdRebuildSubstrate:
                 c_low = str(c).lower()
                 if c_low not in col_order:
                     col_order.append(c_low)
-        for r in rows:
-            for k in r.keys():
-                k_low = str(k).lower()
+        for r in lower_rows:
+            for k_low in r.keys():
                 if k_low not in col_order:
                     col_order.append(k_low)
 
@@ -134,7 +153,7 @@ class ColdRebuildSubstrate:
         col_defs: list[str] = []
         for c in col_order:
             sql_t = "TEXT"
-            for r in rows:
+            for r in lower_rows:
                 v = r.get(c)
                 if v is None:
                     continue
@@ -159,16 +178,12 @@ class ColdRebuildSubstrate:
         self.conn.execute(f"DROP TABLE IF EXISTS {q_table}")
         self.conn.execute(f"CREATE TABLE {q_table} ({', '.join(col_defs)})")
 
-        if rows:
+        if lower_rows:
             placeholders = ", ".join(["?"] * len(col_order))
             q_cols = ", ".join(_quote_ident(c) for c in col_order)
             insert_sql = f"INSERT INTO {q_table} ({q_cols}) VALUES ({placeholders})"
             batch = [
-                tuple(
-                    _db_bind_val({str(k).lower(): v for k, v in r.items()}.get(c))
-                    for c in col_order
-                )
-                for r in rows
+                tuple(_db_bind_val(r.get(c)) for c in col_order) for r in lower_rows
             ]
             self.conn.executemany(insert_sql, batch)
 
@@ -215,7 +230,7 @@ class ColdRebuildSubstrate:
                     f"DELETE FROM {q_table} WHERE {_quote_ident(eff_pk)} = ?",
                     (_db_bind_val(old_row[eff_pk]),),
                 )
-        elif op == "UPDATE" and old_row and new_row:
+        elif op == "UPDATE" and new_row:
             pk_val = old_row.get(eff_pk, new_row.get(eff_pk))
             if pk_val is not None:
                 cols = sorted(new_row.keys())
@@ -256,6 +271,7 @@ class ColdRebuildSubstrate:
     def build_group_state_sql(
         self, shape: QueryShape | MultiTableJoinShape
     ) -> tuple[str, list[str]]:
+        sum_fn = "SMPL_DEC_SUM" if self.backend == "sqlite" else "SUM"
         if isinstance(shape, MultiTableJoinShape):
             base_rel = normalize_relation(shape.base_relation)
             base_qual = shape.effective_base_qualifier
@@ -284,7 +300,7 @@ class ColdRebuildSubstrate:
             if shape.agg_fn in ("sum", "avg") and shape.agg_col is not None:
                 aq, ac = shape.agg_col
                 agg_expr = f"{_quote_ident(aq)}.{_quote_ident(ac)}"
-                select_exprs.append(f"COALESCE(SUM({agg_expr}), 0) AS sum_val")
+                select_exprs.append(f"COALESCE({sum_fn}({agg_expr}), 0) AS sum_val")
                 select_exprs.append(f"COUNT({agg_expr}) AS non_null_count")
             elif shape.agg_fn == "count" and shape.agg_col is not None:
                 aq, ac = shape.agg_col
@@ -298,8 +314,9 @@ class ColdRebuildSubstrate:
 
             where_parts: list[str] = []
             for q, c, op, lit in shape.predicate_terms:
+                sql_op = "=" if op == "==" else op
                 where_parts.append(
-                    f"{_quote_ident(q)}.{_quote_ident(c)} {op} {_format_sql_literal(lit)}"
+                    f"{_quote_ident(q)}.{_quote_ident(c)} {sql_op} {_format_sql_literal(lit)}"
                 )
 
             sql = f"SELECT {', '.join(select_exprs)} FROM {from_sql}"
@@ -322,7 +339,7 @@ class ColdRebuildSubstrate:
 
         if shape.agg_fn in ("sum", "avg") and shape.agg_col is not None:
             q_agg = _quote_ident(shape.agg_col)
-            select_exprs.append(f"COALESCE(SUM({q_agg}), 0) AS sum_val")
+            select_exprs.append(f"COALESCE({sum_fn}({q_agg}), 0) AS sum_val")
             select_exprs.append(f"COUNT({q_agg}) AS non_null_count")
         elif shape.agg_fn == "count" and shape.agg_col is not None:
             q_agg = _quote_ident(shape.agg_col)
@@ -335,7 +352,10 @@ class ColdRebuildSubstrate:
 
         where_parts = []
         for col, op, lit in shape.predicate.terms:
-            where_parts.append(f"{_quote_ident(col)} {op} {_format_sql_literal(lit)}")
+            sql_op = "=" if op == "==" else op
+            where_parts.append(
+                f"{_quote_ident(col)} {sql_op} {_format_sql_literal(lit)}"
+            )
 
         sql = f"SELECT {', '.join(select_exprs)} FROM {q_table}"
         if where_parts:
@@ -343,6 +363,11 @@ class ColdRebuildSubstrate:
         if group_exprs:
             sql += f" GROUP BY {', '.join(group_exprs)}"
         return sql, group_col_keys
+
+    def _normalize_group_val(self, val: Any) -> Any:
+        if isinstance(val, float):
+            return Decimal(str(val))
+        return val
 
     def query_group_state(
         self, shape: QueryShape | MultiTableJoinShape
@@ -357,7 +382,7 @@ class ColdRebuildSubstrate:
             group_stats[()] = (Decimal(0), 0, 0)
 
         for raw in rows:
-            g_vals = raw[:num_g]
+            g_vals = tuple(self._normalize_group_val(v) for v in raw[:num_g])
             raw_sum = raw[num_g]
             raw_nn = int(raw[num_g + 1] or 0)
             raw_rc = int(raw[num_g + 2] or 0)
@@ -369,7 +394,7 @@ class ColdRebuildSubstrate:
             elif num_g == 1:
                 g_key = g_vals[0]
             else:
-                g_key = tuple(g_vals)
+                g_key = g_vals
             group_stats[g_key] = (sum_dec, raw_nn, raw_rc)
         return group_stats
 
@@ -423,3 +448,12 @@ class ColdRebuildSubstrate:
         rows = self.fetch_table_rows(ext_cache.shape.relation)
         ext_cache.rebuild(rows)
         return ext_cache
+
+
+ColdRebuildAdapter = ColdRebuildSubstrate
+
+__all__ = [
+    "ColdRebuildAdapter",
+    "ColdRebuildSubstrate",
+    "HAS_DUCKDB",
+]

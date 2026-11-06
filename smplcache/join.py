@@ -1149,6 +1149,10 @@ class JoinAuxState:
                 raw_fk = lower_row.get(fk_col)
                 if raw_fk is not None:
                     norm_fk = _normalize_group_atom(raw_fk)
+                    try:
+                        hash(norm_fk)
+                    except TypeError:
+                        continue
                     if norm_fk in self.evicted_fk_buckets.get(
                         (child_rel, fk_col), set()
                     ):
@@ -1167,6 +1171,10 @@ class JoinAuxState:
                 raw_val = lower_row.get(join_col)
                 if raw_val is not None:
                     norm_val = _normalize_group_atom(raw_val)
+                    try:
+                        hash(norm_val)
+                    except TypeError:
+                        continue
                     sec_map.setdefault(norm_val, set()).add(pk_val)
 
     def _unindex_row_fks(
@@ -1177,6 +1185,10 @@ class JoinAuxState:
                 raw_fk = lower_row.get(fk_col)
                 if raw_fk is not None:
                     norm_fk = _normalize_group_atom(raw_fk)
+                    try:
+                        hash(norm_fk)
+                    except TypeError:
+                        continue
                     pks = bucket_map.get(norm_fk)
                     if pks is not None:
                         pks.discard(pk_val)
@@ -1187,6 +1199,10 @@ class JoinAuxState:
                 raw_val = lower_row.get(join_col)
                 if raw_val is not None:
                     norm_val = _normalize_group_atom(raw_val)
+                    try:
+                        hash(norm_val)
+                    except TypeError:
+                        continue
                     pks = sec_map.get(norm_val)
                     if pks is not None:
                         pks.discard(pk_val)
@@ -1548,6 +1564,55 @@ class JoinAuxState:
             self._index_row_fks(rel, new_pk, merged)
             self.record_access(rel, new_pk)
             self._enforce_capacity_bounds(rel)
+
+    def apply_disjoint_update(
+        self,
+        relation: str,
+        old_map: dict[str, Any],
+        new_map: dict[str, Any],
+    ) -> None:
+        """
+        Update a resident row in `table_rows` on a `disjoint_columns` `UPDATE`
+        without resurrecting evicted primary keys or perturbing W-TinyLFU access
+        recency/frequency counters, while keeping `fk_index` and
+        `secondary_join_index` synchronized.
+        """
+        rel = normalize_relation(relation)
+        if rel not in self.all_relations():
+            return
+        pk_col = self.pk_col_for(rel)
+        if pk_col not in old_map and pk_col not in new_map:
+            return
+        tbl = self.table_rows.setdefault(rel, {})
+        old_pk = _normalize_group_atom(old_map.get(pk_col, new_map.get(pk_col)))
+        new_pk = _normalize_group_atom(new_map.get(pk_col, old_map.get(pk_col)))
+        if (
+            self.is_pk_evicted(rel, old_pk)
+            or self.is_pk_evicted(rel, new_pk)
+            or old_pk not in tbl
+        ):
+            if self.is_pk_evicted(rel, old_pk) and not _values_equal(old_pk, new_pk):
+                self._record_tombstone(rel, new_pk)
+            return
+        existing = tbl.pop(old_pk, old_map)
+        self._unindex_row_fks(rel, old_pk, existing)
+        if not _values_equal(old_pk, new_pk):
+            if rel in self._row_last_access and old_pk in self._row_last_access[rel]:
+                self._row_last_access[rel][new_pk] = self._row_last_access[rel].pop(
+                    old_pk
+                )
+            if rel in self._row_access_freq and old_pk in self._row_access_freq[rel]:
+                self._row_access_freq[rel][new_pk] = self._row_access_freq[rel].pop(
+                    old_pk
+                )
+            if rel in self._row_inserted_at and old_pk in self._row_inserted_at[rel]:
+                self._row_inserted_at[rel][new_pk] = self._row_inserted_at[rel].pop(
+                    old_pk
+                )
+        merged = dict(existing)
+        merged.update(new_map)
+        tbl[new_pk] = merged
+        self._index_row_fks(rel, new_pk, merged)
 
 
 def rebuild_join_cache(
@@ -2132,12 +2197,7 @@ def process_join_event(
         pk_col = aux_state.pk_col_for(event_rel)
         if decision.reason == "disjoint_columns":
             if op == "UPDATE" and (pk_col in old_map or pk_col in new_map):
-                old_pk = _normalize_group_atom(old_map.get(pk_col, new_map.get(pk_col)))
-                rel_store = aux_state.table_rows.get(event_rel, {})
-                if old_pk in rel_store and not aux_state.is_pk_evicted(
-                    event_rel, old_pk
-                ):
-                    rel_store[old_pk].update(new_map)
+                aux_state.apply_disjoint_update(event_rel, old_map, new_map)
             return decision
         if (
             (op == "INSERT" and pk_col in new_map)
@@ -2497,14 +2557,7 @@ class SharedJoinAuxPool:
                     self.aux_state.apply_row_mutation(event_rel, op, old_map, new_map)
             elif any_disjoint_preserve:
                 if op == "UPDATE" and (pk_col in old_map or pk_col in new_map):
-                    old_pk = _normalize_group_atom(
-                        old_map.get(pk_col, new_map.get(pk_col))
-                    )
-                    rel_store = self.aux_state.table_rows.get(event_rel, {})
-                    if old_pk in rel_store and not self.aux_state.is_pk_evicted(
-                        event_rel, old_pk
-                    ):
-                        rel_store[old_pk].update(new_map)
+                    self.aux_state.apply_disjoint_update(event_rel, old_map, new_map)
 
         if any_invalidated and on_invalidate is not None:
             live_tables = on_invalidate()
