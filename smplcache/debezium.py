@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+import json
 import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -979,3 +980,164 @@ class WalStreamProcessor:
                 "uncommitted_transaction_discarded", dangling_tx
             )
         ], cache
+
+
+@dataclass
+class PostgresWALMessage:
+    lsn: str
+    action: str
+    schema: str
+    table: str
+    identity_cols: list[str]
+    old_tuple: dict[str, Any]
+    new_tuple: dict[str, Any]
+
+
+def _cdc_operation(value: Any) -> str:
+    if type(value) is not str:
+        raise ValueError("CDC operation must be a string")
+    operations = {
+        "I": "INSERT",
+        "U": "UPDATE",
+        "D": "DELETE",
+        "INSERT": "INSERT",
+        "UPDATE": "UPDATE",
+        "DELETE": "DELETE",
+    }
+    try:
+        return operations[value.upper()]
+    except KeyError as exc:
+        raise ValueError("unsupported CDC operation") from exc
+
+
+def _cdc_row(names: Any, values: Any) -> dict[str, Any]:
+    if not isinstance(names, list) or not isinstance(values, list):
+        raise ValueError("CDC columns and values must be arrays")
+    if len(names) != len(values):
+        raise ValueError("CDC column/value lengths differ")
+    if any(type(name) is not str or not name for name in names):
+        raise ValueError("CDC column names must be nonempty strings")
+    if len(set(names)) != len(names):
+        raise ValueError("duplicate CDC column names")
+    return dict(zip(names, values))
+
+
+def _decode_wal2json_v1_change(
+    change: dict[str, Any],
+    idx: int,
+    default_lsn: str | None = None,
+) -> WriteEvent:
+    operation = _cdc_operation(change.get("kind", change.get("action")))
+    if (
+        "kind" in change
+        and "action" in change
+        and _cdc_operation(change["action"]) != operation
+    ):
+        raise ValueError("contradictory CDC operation labels")
+    table = change.get("table")
+    if type(table) is not str or not table:
+        raise ValueError("CDC table must be a nonempty string")
+    names = change.get("columnnames", [])
+    new = _cdc_row(names, change.get("columnvalues", []))
+    old: dict[str, Any] = {}
+    if "oldvalues" in change:
+        old = _cdc_row(names, change["oldvalues"])
+    keys = change.get("oldkeys", {})
+    if not isinstance(keys, dict):
+        raise ValueError("CDC oldkeys must be an object")
+    old_keys = _cdc_row(keys.get("keynames", []), keys.get("keyvalues", []))
+    if any(key in old and old[key] != value for key, value in old_keys.items()):
+        raise ValueError("contradictory CDC oldkeys and oldvalues")
+    old.update(old_keys)
+    if operation == "INSERT" and old:
+        raise ValueError("INSERT cannot carry an old image")
+    if operation == "DELETE" and new:
+        raise ValueError("DELETE cannot carry a new image")
+
+    raw_lsn = change.get("nextlsn", change.get("lsn", default_lsn))
+    lsn_str = str(raw_lsn) if raw_lsn is not None and str(raw_lsn) != "" else "0"
+    return WriteEvent(
+        relation=table,
+        changed_cols=set(old) | set(new),
+        old=old,
+        new=new,
+        event_id=f"wal_{lsn_str}_{idx}",
+        operation=operation,
+        boundary_clock=lsn_str if lsn_str != "0" else None,
+        old_image_complete=False,
+        new_image_complete=False,
+        changed_cols_complete=False,
+    )
+
+
+class PostgresLogicalStreamDecoder:
+    """
+    Decode PostgreSQL `wal2json` v1 row arrays (`columnnames`/`columnvalues`/
+    `oldvalues`/`oldkeys`) and decoded `pgoutput` tuple wrappers.
+
+    Observed tuples do not establish replica-identity or schema completeness;
+    `old_image_complete`, `new_image_complete`, and `changed_cols_complete`
+    therefore remain `False` so same-relation certification invalidates safely
+    unless completeness is separately established.
+    """
+
+    def __init__(self, target_schema: str = "public") -> None:
+        self.target_schema = target_schema
+
+    def decode_wal2json_payload(
+        self, raw_payload: str | dict[str, Any]
+    ) -> list[WriteEvent]:
+        data = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
+        if not isinstance(data, dict):
+            raise ValueError("CDC payload must be an object")
+        changes = data.get("change", [data])
+        if not isinstance(changes, list):
+            raise ValueError("CDC change must be an array")
+        top_lsn = data.get(
+            "nextlsn", data.get("lsn", data.get("xid", data.get("txId")))
+        )
+        top_lsn_str = str(top_lsn) if top_lsn is not None else None
+        events: list[WriteEvent] = []
+        for idx, change in enumerate(changes):
+            if not isinstance(change, dict):
+                raise ValueError("CDC change entry must be an object")
+            if (
+                self.target_schema
+                and change.get("schema", "public") != self.target_schema
+            ):
+                continue
+            events.append(_decode_wal2json_v1_change(change, idx, top_lsn_str))
+        return events
+
+    def decode_pgoutput_dict(
+        self,
+        table: str,
+        action: str,
+        old_tuple: dict[str, Any] | None,
+        new_tuple: dict[str, Any] | None,
+        event_id: str = "pgout_001",
+    ) -> WriteEvent:
+        operation = _cdc_operation(action)
+        if type(table) is not str or not table:
+            raise ValueError("CDC table must be a nonempty string")
+        if old_tuple is not None and not isinstance(old_tuple, dict):
+            raise ValueError("old tuple must be an object or None")
+        if new_tuple is not None and not isinstance(new_tuple, dict):
+            raise ValueError("new tuple must be an object or None")
+        old = dict(old_tuple) if old_tuple is not None else {}
+        new = dict(new_tuple) if new_tuple is not None else {}
+        if operation == "INSERT" and old:
+            raise ValueError("INSERT cannot carry an old image")
+        if operation == "DELETE" and new:
+            raise ValueError("DELETE cannot carry a new image")
+        return WriteEvent(
+            relation=table,
+            changed_cols=set(old) | set(new),
+            old=old,
+            new=new,
+            event_id=event_id,
+            operation=operation,
+            old_image_complete=False,
+            new_image_complete=False,
+            changed_cols_complete=False,
+        )

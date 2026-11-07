@@ -62,6 +62,10 @@ def check_cdc_evidence(
             relation=normalize_relation(event.relation) or event.relation,
             decision_kind=DecisionKind.UNSUPPORTED,
             reason_code="",
+            operation=event.operation,
+            old_image_complete=bool(event.old_image_complete),
+            new_image_complete=bool(event.new_image_complete),
+            changed_cols_complete=bool(event.changed_cols_complete),
         )
         return Decision.unsupported(f"unsupported_sql: {res.reason}", cert)
 
